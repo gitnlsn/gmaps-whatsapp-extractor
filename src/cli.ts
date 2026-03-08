@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { textSearch, getPlaceDetails } from "./places";
 import { classifyPhone, buildWaMeLink } from "./phone";
 import { writeCsv } from "./csv";
+import { scoreLeads } from "./gemini";
 import { ExtractedContact, PlaceTextSearchResult } from "./types";
 
 config();
@@ -20,15 +21,30 @@ async function main() {
     .option("-o, --output <file>", "CSV output file path")
     .option("-c, --country <code>", "Default country code for phone parsing (e.g. BR)")
     .option("-l, --limit <n>", "Max results to process", "60")
+    .option("--score", "Score leads using Gemini AI")
+    .option("--no-website", "Only include businesses without a website")
     .parse();
 
   const query = program.args[0];
-  const opts = program.opts<{ output?: string; country?: string; limit: string }>();
+  const opts = program.opts<{
+    output?: string;
+    country?: string;
+    limit: string;
+    score?: boolean;
+    website?: boolean;
+  }>();
   const limit = parseInt(opts.limit, 10);
+  const noWebsite = opts.website === false;
 
   const apiKey = process.env.GOOGLE_MAPS_API_KEY;
   if (!apiKey) {
     console.error("Error: GOOGLE_MAPS_API_KEY not set. Create a .env file or set the environment variable.");
+    process.exit(1);
+  }
+
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  if (opts.score && !geminiApiKey) {
+    console.error("Error: GEMINI_API_KEY not set. Required when using --score flag.");
     process.exit(1);
   }
 
@@ -47,7 +63,7 @@ async function main() {
   console.log(`Found ${places.length} places. Fetching details...`);
 
   // Step 2: Fetch details and extract contacts
-  const contacts: ExtractedContact[] = [];
+  let contacts: ExtractedContact[] = [];
   let withPhone = 0;
 
   for (const place of places) {
@@ -58,12 +74,22 @@ async function main() {
       const result = classifyPhone(details.internationalPhoneNumber, opts.country);
 
       if (result && result.isMobile) {
+        // Apply no-website filter if set
+        if (noWebsite && details.websiteUri) {
+          continue;
+        }
+
         const waMeLink = buildWaMeLink(result.e164);
         contacts.push({
           name: details.displayName.text,
           phone: result.e164,
           waMeLink,
           address: details.formattedAddress,
+          websiteUri: details.websiteUri,
+          rating: details.rating,
+          userRatingCount: details.userRatingCount,
+          primaryType: details.primaryType,
+          googleMapsUri: details.googleMapsUri,
         });
         console.log(`${details.displayName.text}: ${waMeLink}`);
       }
@@ -72,13 +98,24 @@ async function main() {
     await sleep(200);
   }
 
-  // Step 3: CSV output
+  // Step 3: Gemini scoring
+  if (opts.score && geminiApiKey && contacts.length > 0) {
+    console.log(`\nScoring ${contacts.length} leads with Gemini...`);
+    contacts = await scoreLeads(contacts, geminiApiKey);
+
+    console.log("\n--- Lead Scores ---");
+    for (const c of contacts) {
+      console.log(`[${c.leadScore}/10] ${c.name} — ${c.leadScoreReason}`);
+    }
+  }
+
+  // Step 4: CSV output
   if (opts.output) {
     await writeCsv(opts.output, contacts);
     console.log(`\nCSV written to ${opts.output}`);
   }
 
-  // Step 4: Summary
+  // Step 5: Summary
   console.log(`\nSummary: Found ${places.length} places, ${withPhone} had phones, ${contacts.length} were mobile`);
 }
 

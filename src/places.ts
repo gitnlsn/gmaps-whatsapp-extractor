@@ -19,7 +19,7 @@ export async function* textSearch(
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": apiKey,
-        "X-Goog-FieldMask": "places.name,places.displayName,places.formattedAddress,nextPageToken",
+        "X-Goog-FieldMask": "places.name,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.primaryType,nextPageToken",
       },
       body: JSON.stringify(body),
     });
@@ -47,7 +47,7 @@ export async function getPlaceDetails(
   const res = await fetch(`${BASE_URL}/${resourceName}`, {
     headers: {
       "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask": "displayName,formattedAddress,internationalPhoneNumber",
+      "X-Goog-FieldMask": "displayName,formattedAddress,internationalPhoneNumber,websiteUri,rating,userRatingCount,primaryType,editorialSummary,regularOpeningHours,googleMapsUri",
     },
   });
 

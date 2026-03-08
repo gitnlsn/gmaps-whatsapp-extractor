@@ -1,4 +1,4 @@
-import { parsePhoneNumber, CountryCode } from "libphonenumber-js";
+import { parsePhoneNumber, CountryCode } from "libphonenumber-js/max";
 
 export function classifyPhone(
   rawNumber: string,

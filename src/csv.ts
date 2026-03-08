@@ -9,10 +9,23 @@ function escapeCsvField(field: string): string {
 }
 
 export function formatCsv(contacts: ExtractedContact[]): string {
-  const header = "name,phone,wa_me_link,address";
-  const rows = contacts.map(
-    (c) =>
-      [c.name, c.phone, c.waMeLink, c.address].map(escapeCsvField).join(",")
+  const header = "name,phone,wa_me_link,address,website,rating,review_count,type,google_maps_url,lead_score,lead_score_reason";
+  const rows = contacts.map((c) =>
+    [
+      c.name,
+      c.phone,
+      c.waMeLink,
+      c.address,
+      c.websiteUri ?? "",
+      c.rating?.toString() ?? "",
+      c.userRatingCount?.toString() ?? "",
+      c.primaryType ?? "",
+      c.googleMapsUri ?? "",
+      c.leadScore?.toString() ?? "",
+      c.leadScoreReason ?? "",
+    ]
+      .map(escapeCsvField)
+      .join(",")
   );
   return [header, ...rows].join("\n") + "\n";
 }

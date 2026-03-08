@@ -31,6 +31,23 @@ export interface LeadScore {
   reason: string;
 }
 
+export interface CnpjCompany {
+  status: string;
+  companyName: string;
+  cnpj: string;
+  location: string;
+  detailUrl: string;
+  razaoSocial?: string;
+  capitalSocial?: string;
+  cnaePrincipal?: string;
+  dataAbertura?: string;
+  nomeFantasia?: string;
+  naturezaJuridica?: string;
+  endereco?: string;
+  cnaesSecundarios?: string;
+  cnpjFull?: string;
+}
+
 export interface ExtractedContact {
   name: string;
   phone: string;

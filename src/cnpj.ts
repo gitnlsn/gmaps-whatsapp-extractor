@@ -6,7 +6,7 @@ const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 function buildListUrl(pageNumber: number, cnae?: string): string {
-  let url = `${BASE_URL}/resultado?page=${pageNumber}&localizacao=SP-São+Paulo&porte=1&capitalSocial=0;50000&opcaoMei=Sim&cnaeSecundario=1&tipoEmpresa=Matriz&tipoDados=lista`;
+  let url = `${BASE_URL}/resultado?page=${pageNumber}&localizacao=SP-São+Paulo&porte=1&capitalSocial=0;50000&cnaeSecundario=1&tipoEmpresa=Matriz&tipoDados=lista`;
   if (cnae) url += `&cnae=${cnae}`;
   return url;
 }

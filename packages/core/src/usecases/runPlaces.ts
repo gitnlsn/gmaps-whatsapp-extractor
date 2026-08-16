@@ -1,6 +1,7 @@
 import { requirePlaces, type Deps } from "../ports/index";
 import { Budget, BudgetExceededError, usageReport, type SkuUsage } from "../services/budget";
 import { checkSite, upsertEnrichment, websiteFromEmail } from "./enrichLeads";
+import { resolveOffer } from "./offerRepo";
 
 /**
  * Google Places as a scalpel, not a hose.
@@ -24,6 +25,16 @@ export interface PlacesRunOptions {
   allowPaid: boolean;
   dryRun: boolean;
   recheck: boolean;
+  /**
+   * Walk this offer's shortlist in rank order instead of the whole base.
+   *
+   * Without it, the 1,000-call monthly allowance — the only budget in this tool
+   * that is denominated in money — gets spent on whatever the global ordering
+   * happens to surface, which for an education campaign was dentists and
+   * medical practices. `enrich` and `score` have taken `--offer` since the
+   * offers migration; this stage was the one that never did.
+   */
+  offerId?: string;
 }
 
 interface Candidate {
@@ -58,7 +69,9 @@ export async function runPlacesEnrichment(
   const places = requirePlaces(deps);
   const { progress } = deps;
 
-  const budget = new Budget(deps.db, { allowPaid: opts.allowPaid });
+  // A ceiling for this run on top of the monthly one, so `--limit 25` cannot
+  // become 26 billable calls through a retry.
+  const budget = new Budget(deps.db, { allowPaid: opts.allowPaid, maxRequests: opts.limit * 2 });
 
   // Prioritise: recently opened businesses in the target verticals that we can
   // actually contact and have not looked at yet.
@@ -69,10 +82,13 @@ export async function runPlacesEnrichment(
   // individual's name through Google. A trade name is both searchable and the
   // thing that is genuinely public. About 20% of leads have one, which is far
   // more than the 1,000/month budget can consume anyway.
+  const offer = opts.offerId ? await resolveOffer(deps, opts.offerId) : null;
+
   const candidates = await deps.db.query<Candidate>(
     `SELECT l.cnpj, l.nome_fantasia AS nome,
             l.municipio_nome AS municipio, l.uf, l.email
      FROM leads l
+     ${offer ? "JOIN offer_candidates oc ON oc.cnpj = l.cnpj AND oc.offer_id = $2" : ""}
      LEFT JOIN enrichment e ON e.cnpj = l.cnpj
      LEFT JOIN outreach o ON o.cnpj = l.cnpj
      LEFT JOIN suppression s ON s.phone_e164 = l.phone_e164
@@ -84,10 +100,13 @@ export async function runPlacesEnrichment(
        AND o.cnpj IS NULL
        AND s.phone_e164 IS NULL
        ${opts.recheck ? "" : "AND e.google_checked_at IS NULL"}
-     ORDER BY l.is_mobile DESC NULLS LAST,
+     -- With an offer, rank order decides who gets the scarce paid calls. Without
+     -- one the old global ordering stands, unchanged.
+     ORDER BY ${offer ? "oc.rank_score DESC," : ""}
+              l.is_mobile DESC NULLS LAST,
               l.data_inicio_atividade DESC NULLS LAST
      LIMIT $1`,
-    [opts.limit]
+    offer ? [opts.limit, offer.id] : [opts.limit]
   );
 
   if (candidates.length === 0) {

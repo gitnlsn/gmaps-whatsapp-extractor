@@ -440,6 +440,7 @@ program
   .option("--allow-paid", "Continue past the free tier (this WILL cost money)")
   .option("--recheck", "Re-check leads already seen by Places")
   .option("--dry-run", "Show the cost and the first queries without calling the API")
+  .option("-o, --offer <id>", "Spend the quota on this offer's shortlist, in rank order")
   .action((opts) =>
     run(async (d) => {
       const result = await runPlacesEnrichment(d, {
@@ -447,6 +448,7 @@ program
         allowPaid: Boolean(opts.allowPaid),
         recheck: Boolean(opts.recheck),
         dryRun: Boolean(opts.dryRun),
+        offerId: opts.offer,
       });
       printUsage(result.usage);
     })

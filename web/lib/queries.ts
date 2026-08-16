@@ -14,8 +14,8 @@ export interface LeadRow {
   is_mobile: boolean | null;
   site: string | null;
   site_status: string;
-  web_fit: number | null;
-  chatbot_fit: number | null;
+  fits: Record<string, number | null> | null;
+  best_fit: number | null;
   tier: string | null;
   confidence: string | null;
   offer: string | null;
@@ -33,8 +33,9 @@ export interface Filters {
   status?: string;
   site?: string; // none | dead | hub | builder | noviewport | ok
   canal?: string; // mobile | landline | any (default)
-  minWeb?: number;
-  minChat?: number;
+  /** Which offer's scores to show. Defaults to the active one. */
+  offerId?: string;
+  minFit?: number;
   mei?: string; // sim | nao
   maxIdade?: number;
   q?: string;
@@ -51,11 +52,9 @@ const SORTABLE: Record<string, string> = {
   cnae: "l.cnae_principal",
   idade_anos: "l.data_inicio_atividade",
   porte: "l.porte",
-  web_fit: "s.web_fit",
-  chatbot_fit: "s.chatbot_fit",
   tier: "s.tier",
   status: "COALESCE(o.status, 'novo')",
-  best: "GREATEST(COALESCE(s.web_fit,0), COALESCE(s.chatbot_fit,0))",
+  best: "s.best_fit",
 };
 
 const SITE_STATUS_SQL = `
@@ -86,11 +85,10 @@ function buildWhere(f: Filters): { where: string; params: unknown[] } {
   if (f.municipio) clauses.push(`l.municipio_nome ILIKE ${p(`%${f.municipio}%`)}`);
   if (f.cnae) clauses.push(`l.cnae_principal LIKE ${p(`${f.cnae}%`)}`);
   if (f.tier) clauses.push(`s.tier = ${p(f.tier)}`);
-  if (f.offer) clauses.push(`s.offer = ${p(f.offer)}`);
+  if (f.offer) clauses.push(`s.recommendation = ${p(f.offer)}`);
   if (f.mei === "sim") clauses.push("l.opcao_mei IS TRUE");
   if (f.mei === "nao") clauses.push("l.opcao_mei IS NOT TRUE");
-  if (f.minWeb) clauses.push(`s.web_fit >= ${p(f.minWeb)}`);
-  if (f.minChat) clauses.push(`s.chatbot_fit >= ${p(f.minChat)}`);
+  if (f.minFit) clauses.push(`s.best_fit >= ${p(f.minFit)}`);
   if (f.maxIdade) {
     clauses.push(
       `l.data_inicio_atividade >= (CURRENT_DATE - (${p(f.maxIdade)}::int * interval '1 year'))`
@@ -137,16 +135,26 @@ function buildWhere(f: Filters): { where: string; params: unknown[] } {
   return { where: clauses.join("\n  AND "), params };
 }
 
-const FROM = `
+/**
+ * Scores are per (lead, offer), so this join MUST be scoped to one offer.
+ * Left unscoped, a lead graded under two offers would appear twice in the
+ * table and be double-counted in every total — the quiet failure mode of
+ * making scores multi-offer.
+ */
+function fromSql(p: (v: unknown) => string, offerId: string | undefined): string {
+  return `
   FROM leads l
-  LEFT JOIN scores s     ON s.cnpj = l.cnpj
+  LEFT JOIN scores s     ON s.cnpj = l.cnpj AND s.offer_id = ${p(offerId ?? "")}
   LEFT JOIN enrichment e ON e.cnpj = l.cnpj
   LEFT JOIN outreach o   ON o.cnpj = l.cnpj`;
+}
 
 export async function getLeads(
   f: Filters
 ): Promise<{ rows: LeadRow[]; total: number }> {
   const { where, params } = buildWhere(f);
+  const p = (v: unknown) => `$${params.push(v)}`;
+  const FROM = fromSql(p, f.offerId);
 
   const perPage = Math.min(f.perPage ?? 50, 200);
   const page = Math.max(f.page ?? 1, 1);
@@ -165,7 +173,7 @@ export async function getLeads(
        l.porte, l.opcao_mei AS mei, l.phone_e164, l.is_mobile,
        COALESCE(e.final_url, e.website_url) AS site,
        ${SITE_STATUS_SQL} AS site_status,
-       s.web_fit, s.chatbot_fit, s.tier, s.confidence, s.offer, s.hook,
+       s.fits, s.best_fit, s.tier, s.confidence, s.recommendation AS offer, s.hook,
        ARRAY(SELECT jsonb_array_elements_text(s.evidence -> 'evidence')) AS evidence,
        COALESCE(o.status, 'novo') AS status
      ${FROM}
@@ -207,7 +215,7 @@ export async function getStats(): Promise<Stats> {
       (SELECT count(*) FROM leads
         WHERE phone_e164 IS NOT NULL AND NOT is_mobile)::text                   AS landline,
       (SELECT count(*) FROM enrichment)::text                                   AS enriched,
-      (SELECT count(*) FROM scores WHERE web_fit IS NOT NULL)::text             AS scored,
+      (SELECT count(*) FROM scores WHERE best_fit IS NOT NULL)::text            AS scored,
       (SELECT count(*) FROM scores WHERE tier='hot')::text                      AS hot,
       (SELECT count(*) FROM scores WHERE tier='warm')::text                     AS warm,
       (SELECT count(*) FROM outreach WHERE status='queued')::text               AS queued,
@@ -234,16 +242,18 @@ export async function getStats(): Promise<Stats> {
   };
 }
 
-export async function getLead(cnpj: string) {
+export async function getLead(cnpj: string, offerId?: string) {
+  const params: unknown[] = [cnpj];
+  const p = (v: unknown) => `$${params.push(v)}`;
   return sqlOne<Record<string, unknown>>(
     `SELECT l.*,
             to_jsonb(e.*) AS enrichment,
             to_jsonb(s.*) AS score,
             to_jsonb(o.*) AS outreach,
             ${SITE_STATUS_SQL} AS site_status
-     ${FROM}
+     ${fromSql(p, offerId)}
      WHERE l.cnpj = $1`,
-    [cnpj]
+    params
   );
 }
 
@@ -268,7 +278,7 @@ export async function getCoverage() {
     `SELECT l.uf, l.municipio_nome AS municipio, left(l.cnae_principal, 4) AS cnae,
             count(*)::text                                          AS leads,
             count(e.cnpj)::text                                     AS enriched,
-            count(s.cnpj) FILTER (WHERE s.web_fit IS NOT NULL)::text AS scored,
+            count(s.cnpj) FILTER (WHERE s.best_fit IS NOT NULL)::text AS scored,
             count(*) FILTER (WHERE s.tier = 'hot')::text            AS hot
      FROM leads l
      LEFT JOIN enrichment e ON e.cnpj = l.cnpj
@@ -508,7 +518,10 @@ export async function getOutreach() {
   );
 }
 
-export async function getQueue(limit = 40) {
+export async function getQueue(limit = 40, offerId?: string) {
+  const params: unknown[] = [limit];
+  const p = (v: unknown) => `$${params.push(v)}`;
+  const FROM = fromSql(p, offerId);
   return sql<LeadRow & { draft: string | null }>(
     `SELECT l.cnpj, COALESCE(l.nome_fantasia, l.razao_social) AS nome,
             l.municipio_nome AS municipio, l.uf, l.cnae_principal AS cnae,
@@ -517,13 +530,13 @@ export async function getQueue(limit = 40) {
             l.porte, l.opcao_mei AS mei, l.phone_e164, l.is_mobile,
             COALESCE(e.final_url, e.website_url) AS site,
             ${SITE_STATUS_SQL} AS site_status,
-            s.web_fit, s.chatbot_fit, s.tier, s.confidence, s.offer, s.hook,
+            s.fits, s.best_fit, s.tier, s.confidence, s.recommendation AS offer, s.hook,
             ARRAY(SELECT jsonb_array_elements_text(s.evidence -> 'evidence')) AS evidence,
             COALESCE(o.status, 'novo') AS status,
             o.draft
      ${FROM}
      WHERE l.phone_e164 IS NOT NULL
-       AND s.web_fit IS NOT NULL
+       AND s.best_fit IS NOT NULL
        AND s.tier <> 'cold'
        AND o.cnpj IS NULL
        AND NOT EXISTS (SELECT 1 FROM suppression sup WHERE sup.phone_e164 = l.phone_e164)
@@ -531,11 +544,11 @@ export async function getQueue(limit = 40) {
          SELECT 1 FROM outreach o2 JOIN leads l2 ON l2.cnpj = o2.cnpj
          WHERE l2.phone_e164 = l.phone_e164
        )
-     ORDER BY GREATEST(COALESCE(s.web_fit,0), COALESCE(s.chatbot_fit,0)) DESC,
+     ORDER BY s.best_fit DESC,
               s.confidence = 'high' DESC,
               l.is_mobile DESC NULLS LAST
      LIMIT $1`,
-    [limit]
+    params
   );
 }
 

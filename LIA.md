@@ -15,14 +15,28 @@ Documento exigido pelo Art. 10 da LGPD quando o tratamento se apoia em legítimo
 
 ## 1. Finalidade
 
-Identificar micro e pequenas empresas brasileiras cujo perfil indique necessidade de
-(a) site/landing page ou (b) automação de atendimento por WhatsApp, para oferta comercial
-direta, individual e de baixo volume.
+**A finalidade é por oferta, não global.** Legítimo interesse é específico à finalidade
+declarada, então uma ferramenta que hoje procura clientes para um produto e amanhã para
+outro não tem *uma* finalidade — tem uma por campanha.
 
-A finalidade é **comercial legítima e específica**. Não há criação de perfil
-comportamental, não há decisão automatizada com efeito jurídico sobre o titular, não há
-enriquecimento com dados sensíveis (Art. 5º, II) e não há revenda ou compartilhamento da
-base com terceiros.
+Cada oferta declara a sua no campo `offer_specs.finalidade`, obrigatório no schema e
+obrigatório no formulário que cria a oferta. `npm start -- offer show <id>` imprime a
+finalidade junto da rubrica, e cada pontuação grava `(offer_id, offer_version,
+prompt_sha)` — dá para reconstruir exatamente sob qual finalidade e sob qual critério um
+lead foi avaliado.
+
+Exemplo (a oferta original, `site-chatbot`): *identificar micro e pequenas empresas
+brasileiras cujo perfil indique necessidade de (a) site/landing page ou (b) automação de
+atendimento por WhatsApp, para oferta comercial direta, individual e de baixo volume.*
+
+Qualquer finalidade declarada precisa continuar sendo **comercial legítima e específica**,
+e o que segue vale para todas: não há criação de perfil comportamental, não há decisão
+automatizada com efeito jurídico sobre o titular, não há enriquecimento com dados sensíveis
+(Art. 5º, II) e não há revenda ou compartilhamento da base com terceiros.
+
+**Limite explícito:** uma oferta cuja finalidade não passe nesse teste não pode ser operada
+só porque o software aceita cadastrá-la. O campo obriga a escrever a finalidade; não a
+torna legítima.
 
 ## 2. Dados tratados e origem
 
@@ -44,14 +58,23 @@ a "de onde você tirou esse número?" numa eventual fiscalização da ANPD.
 ## 3. Necessidade
 
 O tratamento é necessário porque não há meio menos invasivo de identificar quais empresas
-têm a carência técnica específica que o serviço resolve. Os dados usados são o mínimo para:
+têm a necessidade específica que o produto resolve. Os dados usados são o mínimo para:
 
 - determinar se a empresa está **ativa** (situação cadastral),
 - determinar se é do **segmento** atendido (CNAE),
-- determinar se há **carência técnica real** (verificação do próprio site da empresa),
+- determinar se **pode contratar** (natureza jurídica — administração pública só compra por
+  licitação, então contatá-la seria contato sem finalidade útil),
+- determinar se há **necessidade real** (verificação do próprio site da empresa),
 - permitir o **contato** (telefone comercial divulgado publicamente).
 
-Não é usado nenhum dado que não participe diretamente de uma dessas quatro decisões.
+Não é usado nenhum dado que não participe diretamente de uma dessas cinco decisões.
+
+**Sobre a verificação do site.** Na oferta original, o site *era* a evidência da carência
+("o site está fora do ar"). Para uma oferta em que isso não vale — por exemplo um produto
+pedagógico vendido a escolas —, a mesma verificação continua necessária, mas por outro
+motivo: é o que estabelece porte, segmento e se a organização já compra software, além de
+ser a origem do fato concreto citado na abordagem. Uma oferta que não precise de nenhum
+desses sinais deve declarar `siteSignals: "none"` e o site não é buscado.
 
 ## 4. Balanceamento — expectativa legítima e direitos do titular
 
@@ -91,6 +114,19 @@ por isso o contato é **sempre relacionado à atividade da empresa** e nunca pes
 - `DAILY_SEND_CAP` (padrão 40) — limite diário aplicado no CLI e no painel.
 - A ferramenta **não envia mensagens**. Só registra o que a pessoa fez manualmente.
 - `source` / `source_url` / `collected_at` — procedência por registro.
+- `outreach_one_per_phone_idx` — índice único no telefone. A regra "uma pessoa, um
+  contato" deixou de ser convenção e passou a ser restrição do banco: com várias ofertas
+  cadastradas, uma segunda campanha **não consegue** inserir contato para um número que
+  já foi abordado. O erro 23505 é a garantia, não a checagem no código.
+- Oferta em pré-venda (`stage: "presell"`) muda o prompt do rascunho: proíbe presente
+  ("temos", "nosso app faz"), proíbe citar cliente, número ou resultado, proíbe oferecer
+  teste, plano ou preço, e obriga a dizer que o produto ainda está sendo construído. O
+  validador recusa a oferta se os fechos contiverem "contratar", "assinar", "plano",
+  "desconto" ou "preço". Vender algo que não existe seria publicidade enganosa (CDC
+  Art. 37) antes de ser problema de LGPD.
+- `offer_specs.finalidade` — finalidade declarada por oferta, obrigatória (ver §1).
+- `OPENROUTER_DAILY_REQUESTS` — teto diário de chamadas ao modelo, conferido **antes** da
+  primeira requisição.
 - Dados do Google Places não são persistidos além do `place_id`, conforme os termos.
 
 ## 6. Direitos do titular (Art. 18)

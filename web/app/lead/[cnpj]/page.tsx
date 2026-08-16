@@ -172,10 +172,14 @@ export default async function LeadPage({ params }: { params: Promise<{ cnpj: str
           <Facts
             title="pontuação"
             rows={[
-              ["web_fit", s.web_fit],
-              ["chatbot_fit", s.chatbot_fit],
+              // Axis names come from whichever offer graded this lead, so the
+              // rows are built from the stored fits rather than fixed columns.
+              ...Object.entries((s.fits ?? {}) as Record<string, number | null>),
+              ["nota", s.best_fit],
               ["tier", s.tier],
-              ["oferta", s.offer],
+              ["oferta", s.offer_id],
+              ["recomendação", s.recommendation],
+              ["rubrica", s.prompt_sha],
               ["confiança", s.confidence],
               ["evidência", evidence.join(" · ")],
               ["justificativa", justification],

@@ -1,127 +1,45 @@
 import { query, withClient } from "./db";
 import { completeJson, LlmError, modelFor } from "./llm";
+import { buildRubricPrompt, buildScoreSchema, promptSha } from "./offers/prompt";
+import { bestFit, tierFor, type OfferSpec } from "./offers/spec";
+import { resolveOffer, type LoadedOffer } from "./offers/repo";
+import { buildStage0Where } from "./offers/rank";
 
-// ------------------------------------------------------------------ rubric
-// Anchored: each level is described concretely, so the model weighs evidence
-// instead of guessing. Kept as one static block so it can be prompt-cached.
-
-const RUBRIC = `Você avalia pequenos negócios brasileiros como potenciais clientes de um desenvolvedor solo que vende duas coisas:
-
-A) SITE / LANDING PAGE
-B) AUTOMAÇÃO DE WHATSAPP / CHATBOT de atendimento
-
-Para cada negócio, dê duas notas independentes de 1 a 5.
-
-IMPORTANTE — os dados vêm da Receita Federal, que NÃO tem campo de site.
-"site: NÃO ENCONTRADO" significa que não achamos um site, não que ele não exista.
-Nesse caso use confidence "low" ou "medium", nunca "high", e não dê 5.
-Nota 5 exige EVIDÊNCIA POSITIVA: um site que respondeu e está morto, é Linktree,
-ou não abre no celular.
-
-web_fit — quanto ele precisa de um SITE:
-  5 = verificamos e o site está morto/404, OU o "site" é só Linktree/Instagram.
-      Evidência concreta, não ausência de informação.
-  4 = tem site mas em construtor grátis (wixsite.com, negocio.site, business.site,
-      wordpress.com) ou sem HTTPS, ou sem meta viewport (não abre direito no celular).
-  3-4 = nenhum site encontrado e sem domínio próprio: provável ausência de presença
-      digital, mas é indício, não prova. Use confidence "low"/"medium".
-  3 = tem site funcional mas parado: rodapé com ano <= 2021, sem formulário,
-      sem caminho de contato.
-  2 = site funcional e razoável, só daria para melhorar.
-  1 = site moderno, rápido, responsivo, com contato claro. Não é cliente.
-
-chatbot_fit — quanto ele precisa de AUTOMAÇÃO DE ATENDIMENTO:
-  5 = já vende por WhatsApp (link wa.me no site/bio) e não tem nenhum sistema de
-      agendamento ou formulário. Volume alto de clientes.
-  4 = negócio de atendimento (clínica, salão, barbearia, oficina, restaurante,
-      pet shop) sem nenhum caminho de contato automatizado no site.
-  3 = tem formulário ou telefone, mas nada de agendamento/automação.
-  2 = já tem algum sistema de agendamento ou atendimento estruturado.
-  1 = empresa sem atendimento ao público, ou já totalmente automatizada.
-
-REGRAS:
-- Baseie-se SOMENTE nas evidências fornecidas. Não invente fatos.
-- Se as evidências forem insuficientes, use confidence "cannot_determine" e
-  notas null.
-- Empresa muito nova (< 2 anos) tende a precisar mais de site.
-- MEI e capital social baixo = ticket menor, mas ainda cliente.
-- tier: "hot" se a maior nota for 5, "warm" se for 4, "cold" se for <= 3.
-- offer: "site" | "chatbot" | "both" | "none" — qual produto oferecer.
-
-O campo MAIS IMPORTANTE é "hook": UMA frase em português do Brasil, informal,
-que você mandaria no WhatsApp, citando um fato CONCRETO e específico daquele
-negócio.
-
-REGRA ABSOLUTA DO HOOK — nunca afirme algo que não foi verificado.
-Se o dado diz "site NÃO ENCONTRADO", você NÃO sabe que eles não têm site.
-Dizer "vi que vocês não têm site" é mentira e queima o contato.
-Nesse caso, ou fale do que você REALMENTE sabe (ramo, cidade, tempo de
-abertura), ou PERGUNTE em vez de afirmar.
-  PROIBIDO: "vi que vocês não têm site"
-  PROIBIDO: "vi que vocês ainda não têm sistema de agendamento"
-  OK:       "vi que a barbearia abriu esse ano aqui em Juiz de Fora — vocês já
-             têm site ou tá tudo no Instagram por enquanto?"
-  OK:       "procurei a lanchonete no Google e não achei site de vocês —
-             é proposital ou ainda tá na lista?"
-
-Quando HOUVER evidência verificada, use o fato direto:
-  BOM: "vi que o site de vocês tá no ar mas não abre direito no celular"
-  BOM: "o link de vocês leva pro Linktree — quem procura no Google não acha"
-  BOM: "o site de vocês tá fora do ar (dá erro 404)"
-
-Se não houver nada específico e honesto a dizer, deixe hook null.`;
-
-const SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["results"],
-  properties: {
-    results: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        // justification first so generation is conditioned on the reasoning.
-        required: [
-          "cnpj",
-          "justification",
-          "web_fit",
-          "chatbot_fit",
-          "confidence",
-          "tier",
-          "offer",
-          "evidence",
-          "hook",
-        ],
-        properties: {
-          cnpj: { type: "string" },
-          justification: { type: "string" },
-          web_fit: { type: ["integer", "null"], minimum: 1, maximum: 5 },
-          chatbot_fit: { type: ["integer", "null"], minimum: 1, maximum: 5 },
-          confidence: {
-            type: "string",
-            enum: ["high", "medium", "low", "cannot_determine"],
-          },
-          tier: { type: "string", enum: ["hot", "warm", "cold"] },
-          offer: { type: "string", enum: ["site", "chatbot", "both", "none"] },
-          evidence: { type: "array", items: { type: "string" } },
-          hook: { type: ["string", "null"] },
-        },
-      },
-    },
-  },
-} as const;
-
+/**
+ * One graded lead. The fit scores are not fixed fields any more — an offer
+ * declares its own axes, so they arrive as extra keys alongside these and are
+ * collected by `fitsFrom` below.
+ */
 interface ScoreResult {
   cnpj: string;
   justification: string;
-  web_fit: number | null;
-  chatbot_fit: number | null;
   confidence: string;
-  tier: string;
-  offer: string;
+  recommendation: string;
   evidence: string[];
   hook: string | null;
+  [axisKey: string]: unknown;
+}
+
+/**
+ * Pulls the offer's axis values out of a model response.
+ *
+ * `cannot_determine` zeroes everything: it is the model saying the evidence was
+ * insufficient, which must stay distinguishable from a confident low score. A
+ * failed API call is different again — that records an error and no confidence
+ * at all — so `error IS NULL` cleanly separates "couldn't tell" from "broke".
+ */
+function fitsFrom(spec: OfferSpec, r: ScoreResult): Record<string, number | null> {
+  const fits: Record<string, number | null> = {};
+  if (r.confidence === "cannot_determine") {
+    for (const axis of spec.rubric.axes) fits[axis.key] = null;
+    return fits;
+  }
+  for (const axis of spec.rubric.axes) {
+    const raw = r[axis.key];
+    const n = typeof raw === "number" ? raw : Number(raw);
+    fits[axis.key] = Number.isInteger(n) && n >= 1 && n <= 5 ? n : null;
+  }
+  return fits;
 }
 
 // ------------------------------------------------------------- candidate row
@@ -130,6 +48,9 @@ interface Candidate {
   cnpj: string;
   nome: string | null;
   cnae: string | null;
+  cnae_desc: string | null;
+  natureza: string | null;
+  natureza_desc: string | null;
   porte: string | null;
   mei: boolean | null;
   capital: string | null;
@@ -152,19 +73,41 @@ interface Candidate {
   psi_performance: number | null;
   title: string | null;
   email_domain: string | null;
+  signals: Record<string, boolean> | null;
 }
 
 /** Deterministic facts, rendered compactly. The model weighs; it does not detect. */
-function renderCandidate(c: Candidate): string {
+function renderCandidate(c: Candidate, spec: OfferSpec): string {
   const bits: string[] = [];
   bits.push(`cnpj: ${c.cnpj}`);
   bits.push(`nome: ${c.nome ?? "(sem nome fantasia)"}`);
-  if (c.cnae) bits.push(`cnae: ${c.cnae}`);
+  // The CNAE description carries far more meaning than the code, and it is the
+  // difference between the model knowing this is a driving school and it
+  // guessing from seven digits.
+  if (c.cnae) bits.push(`cnae: ${c.cnae}${c.cnae_desc ? ` (${c.cnae_desc})` : ""}`);
+  // Natureza jurídica decides whether they can buy at all: 1xxx is public
+  // administration, which needs a licitação; 3xxx is a nonprofit/associação,
+  // which many private schools are.
+  if (c.natureza) {
+    bits.push(`natureza jurídica: ${c.natureza}${c.natureza_desc ? ` (${c.natureza_desc})` : ""}`);
+  }
   if (c.municipio) bits.push(`local: ${c.municipio}/${c.uf ?? ""}`);
   if (c.idade_anos !== null) bits.push(`idade: ${c.idade_anos} anos`);
   if (c.porte) bits.push(`porte: ${c.porte}`);
   if (c.mei) bits.push("MEI: sim");
   if (c.capital) bits.push(`capital social: R$ ${c.capital}`);
+
+  // Offer-specific probes over the stored homepage text. Only hits are shown;
+  // a miss is not evidence of absence, since the page may never have loaded.
+  if (c.signals && spec.probes.length) {
+    const hits = spec.probes.filter((pr) => c.signals?.[pr.key]).map((pr) => pr.label);
+    if (hits.length) bits.push(`no site deles: ${hits.join(", ")}`);
+  }
+
+  // Website-quality detail is irrelevant for some offers. "minimal" keeps only
+  // what can still seed a truthful hook and drops the rest, saving tokens.
+  const detail = spec.rubric.siteSignals;
+  if (detail === "none") return `- ${bits.join(" | ")}`;
 
   if (!c.has_website) {
     // Receita has no website column. All we can say is that no site surfaced —
@@ -187,16 +130,18 @@ function renderCandidate(c: Candidate): string {
         "o 'site' é só link hub (Instagram/Linktree) — NÃO abrimos a página, " +
           "então não se sabe nada sobre responsividade, formulário ou contato"
       );
-    } else {
+    } else if (detail === "full") {
       if (c.is_https === false) bits.push("sem HTTPS (confirmado)");
       if (c.has_viewport === false) bits.push("SEM meta viewport (não responsivo no celular)");
       if (c.has_contact_path === false) bits.push("sem caminho de contato no site");
       if (c.has_wa_link) bits.push("tem link wa.me no site (já vende por WhatsApp)");
       if (c.has_form === false) bits.push("sem formulário");
     }
-    if (c.platform) bits.push(`plataforma: ${c.platform}`);
-    if (c.footer_year) bits.push(`rodapé © ${c.footer_year}`);
-    if (c.psi_performance !== null) bits.push(`PageSpeed mobile: ${c.psi_performance}/100`);
+    if (detail === "full") {
+      if (c.platform) bits.push(`plataforma: ${c.platform}`);
+      if (c.footer_year) bits.push(`rodapé © ${c.footer_year}`);
+      if (c.psi_performance !== null) bits.push(`PageSpeed mobile: ${c.psi_performance}/100`);
+    }
     if (c.title) bits.push(`title: ${c.title}`);
   }
 
@@ -209,27 +154,53 @@ export interface ScoreOptions {
   limit: number;
   batchSize: number;
   rescore: boolean;
+  offerId?: string;
 }
 
 export async function scoreLeads(opts: ScoreOptions): Promise<void> {
+  const offer = await resolveOffer(opts.offerId);
+  const spec = offer.spec;
+
+  // Composed once per run, before the loop: the system prompt must be constant
+  // across every request so it stays prompt-cacheable, and its sha identifies
+  // exactly which rubric produced each row.
+  const systemPrompt = buildRubricPrompt(spec);
+  const schema = buildScoreSchema(spec);
+  const sha = promptSha(systemPrompt);
+
+  const params: unknown[] = [];
+  const p = (v: unknown) => `$${params.push(v)}`;
+  const where = buildStage0Where(spec, p);
+
+  // Scores are per (lead, offer): a lead already graded for THIS offer is
+  // skipped, but one graded for another offer is still fair game.
+  const offerParam = p(offer.id);
+  const limitParam = p(opts.limit);
+
   const candidates = await query<Candidate>(
     `SELECT
        l.cnpj, l.nome_fantasia AS nome, l.cnae_principal AS cnae,
+       cn.descricao AS cnae_desc,
+       l.natureza_juridica AS natureza, NULL::text AS natureza_desc,
        l.porte, l.opcao_mei AS mei, l.capital_social::text AS capital,
        CASE WHEN l.data_inicio_atividade IS NOT NULL
             THEN date_part('year', age(l.data_inicio_atividade))::int END AS idade_anos,
        l.municipio_nome AS municipio, l.uf,
        e.has_website, e.website_url, e.final_url, e.is_dead, e.is_https,
        e.is_link_hub, e.is_free_builder, e.has_viewport, e.has_contact_path,
-       e.has_wa_link, e.has_form, e.platform, e.footer_year, e.psi_performance, e.title
+       e.has_wa_link, e.has_form, e.platform, e.footer_year, e.psi_performance, e.title,
+       -- Only an own-domain address is a signal; a gmail tells you nothing, so
+       -- freemail is rendered as no domain at all rather than as evidence.
+       NULLIF(CASE WHEN split_part(l.email, '@', 2) IN
+                ('gmail.com','hotmail.com','outlook.com','yahoo.com.br','uol.com.br',
+                 'bol.com.br','terra.com.br','ig.com.br','globo.com','r7.com','live.com')
+              THEN '' ELSE split_part(COALESCE(l.email, ''), '@', 2) END, '') AS email_domain,
+       (e.signals -> ${offerParam})::jsonb AS signals
      FROM leads l
      JOIN enrichment e ON e.cnpj = l.cnpj
-     LEFT JOIN scores s ON s.cnpj = l.cnpj
-     LEFT JOIN outreach o ON o.cnpj = l.cnpj
-     LEFT JOIN suppression sup ON sup.phone_e164 = l.phone_e164
-     WHERE l.phone_e164 IS NOT NULL
-       AND sup.phone_e164 IS NULL
-       AND o.cnpj IS NULL
+     LEFT JOIN cnaes cn ON cn.codigo = l.cnae_principal
+     LEFT JOIN scores s ON s.cnpj = l.cnpj AND s.offer_id = ${offerParam}
+     WHERE ${where.join("\n       AND ")}
        ${opts.rescore ? "" : "AND s.cnpj IS NULL"}
      -- Leads with verified site evidence first, then ones with a trade name we
      -- can actually name in a message. A lead with neither yields a generic
@@ -238,18 +209,35 @@ export async function scoreLeads(opts: ScoreOptions): Promise<void> {
               l.is_mobile DESC NULLS LAST,
               (l.nome_fantasia IS NOT NULL) DESC,
               l.data_inicio_atividade DESC NULLS LAST
-     LIMIT $1`,
-    [opts.limit]
+     LIMIT ${limitParam}`,
+    params
   );
 
   if (candidates.length === 0) {
-    console.log("Nothing to score. Run `npm run enrich` first.");
+    console.log(
+      `Nothing to score for "${offer.id}". Run \`npm run enrich\` first, ` +
+        `or widen the offer's targeting.`
+    );
     return;
   }
 
   const model = modelFor("score");
+  const requests = Math.ceil(candidates.length / opts.batchSize);
+
+  // Refuse before the first request rather than dying at request 30 of 50 —
+  // a half-finished run records the remainder as failures, which is noise that
+  // looks like a model problem.
+  const { checkBudget, usageReport } = await import("./llmBudget");
+  const budget = await usageReport();
+  await checkBudget(model, requests);
+
   console.log(
-    `Scoring ${candidates.length} lead(s) with ${model}, ${opts.batchSize} per request...`
+    `Offer: ${offer.title} (${offer.id} v${offer.version}) — rubrica ${sha}\n` +
+      `Eixos: ${spec.rubric.axes.map((a) => a.key).join(", ")}\n` +
+      `Scoring ${candidates.length} lead(s) with ${model}, ${opts.batchSize} per request ` +
+      `= ${requests} requisição(ões).\n` +
+      `Cota do dia: ${budget.used}/${budget.limit} usadas, ${budget.left} restantes. ` +
+      `Tempo estimado: ~${Math.ceil((requests * 3.2) / 60)} min.`
   );
 
   let scored = 0;
@@ -258,16 +246,16 @@ export async function scoreLeads(opts: ScoreOptions): Promise<void> {
 
   for (let i = 0; i < candidates.length; i += opts.batchSize) {
     const batch = candidates.slice(i, i + opts.batchSize);
-    const listing = batch.map(renderCandidate).join("\n");
+    const listing = batch.map((c) => renderCandidate(c, spec)).join("\n");
 
     try {
       const { value } = await completeJson<{ results?: ScoreResult[] }>({
         task: "score",
-        schema: SCHEMA as unknown as Record<string, unknown>,
+        schema,
         schemaName: "lead_scores",
         maxTokens: 400 * batch.length + 500,
         messages: [
-          { role: "system", content: RUBRIC },
+          { role: "system", content: systemPrompt },
           {
             role: "user",
             content:
@@ -301,20 +289,20 @@ export async function scoreLeads(opts: ScoreOptions): Promise<void> {
       for (const c of batch) {
         const r = byCnpj.get(c.cnpj);
         if (!r) {
-          await recordFailure(c.cnpj, model, "model omitted this cnpj from its response");
+          await recordFailure(c.cnpj, offer, model, "model omitted this cnpj from its response");
           failed++;
           continue;
         }
-        await recordScore(c.cnpj, model, r);
+        const tier = await recordScore(c.cnpj, offer, model, sha, spec, r);
         scored++;
-        tiers[r.tier] = (tiers[r.tier] ?? 0) + 1;
+        if (tier) tiers[tier] = (tiers[tier] ?? 0) + 1;
       }
     } catch (err) {
       // A batch failure marks every lead in it as failed with the real reason.
       // It never assigns a middle score — unscored must stay distinguishable.
       const msg = err instanceof LlmError ? err.message : (err as Error).message;
       for (const c of batch) {
-        await recordFailure(c.cnpj, model, msg.slice(0, 400));
+        await recordFailure(c.cnpj, offer, model, msg.slice(0, 400));
         failed++;
       }
       console.warn(`\n  Batch failed: ${msg.slice(0, 160)}`);
@@ -336,44 +324,75 @@ export async function scoreLeads(opts: ScoreOptions): Promise<void> {
 
 async function recordScore(
   cnpj: string,
+  offer: LoadedOffer,
   model: string,
+  sha: string,
+  spec: OfferSpec,
   r: ScoreResult
-): Promise<void> {
+): Promise<string | null> {
+  const fits = fitsFrom(spec, r);
+  // Derived here, never asked of the model: it is a pure function of the fits,
+  // so accepting it as output would add a failure mode and make the hot/warm/
+  // cold rule unauditable.
+  const tier = tierFor(fits);
+  const best = bestFit(fits);
+  const hasAny = best !== null;
+
   await withClient((c) =>
     c.query(
-      `INSERT INTO scores (cnpj, web_fit, chatbot_fit, confidence, tier, offer,
-                           evidence, hook, model, scored_at, error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now(), NULL)
-       ON CONFLICT (cnpj) DO UPDATE SET
-         web_fit = EXCLUDED.web_fit, chatbot_fit = EXCLUDED.chatbot_fit,
-         confidence = EXCLUDED.confidence, tier = EXCLUDED.tier,
-         offer = EXCLUDED.offer, evidence = EXCLUDED.evidence,
-         hook = EXCLUDED.hook, model = EXCLUDED.model,
+      `INSERT INTO scores (cnpj, offer_id, offer_version, fits, best_fit, confidence,
+                           tier, recommendation, evidence, hook, model, prompt_sha,
+                           scored_at, error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), NULL)
+       ON CONFLICT (cnpj, offer_id) DO UPDATE SET
+         offer_version = EXCLUDED.offer_version, fits = EXCLUDED.fits,
+         best_fit = EXCLUDED.best_fit, confidence = EXCLUDED.confidence,
+         tier = EXCLUDED.tier, recommendation = EXCLUDED.recommendation,
+         evidence = EXCLUDED.evidence, hook = EXCLUDED.hook,
+         model = EXCLUDED.model, prompt_sha = EXCLUDED.prompt_sha,
          scored_at = now(), error = NULL`,
       [
         cnpj,
-        r.confidence === "cannot_determine" ? null : r.web_fit,
-        r.confidence === "cannot_determine" ? null : r.chatbot_fit,
+        offer.id,
+        offer.version,
+        hasAny ? JSON.stringify(fits) : null,
+        best,
         r.confidence,
-        r.tier,
-        r.offer,
-        JSON.stringify({ evidence: r.evidence, justification: r.justification }),
+        tier,
+        r.recommendation ?? null,
+        JSON.stringify({ evidence: r.evidence ?? [], justification: r.justification }),
         r.hook,
         model,
+        sha,
       ]
     )
   );
+  return tier;
 }
 
-async function recordFailure(cnpj: string, model: string, error: string): Promise<void> {
+/**
+ * A failed call records the reason and nothing else.
+ *
+ * Note `confidence` stays NULL here, while a model that answered
+ * "cannot_determine" records that string with error NULL. That is what makes
+ * `error IS NULL` a clean test for "we asked and it could not tell" versus
+ * "the call broke" — two situations that used to look identical.
+ */
+async function recordFailure(
+  cnpj: string,
+  offer: LoadedOffer,
+  model: string,
+  error: string
+): Promise<void> {
   await withClient((c) =>
     c.query(
-      `INSERT INTO scores (cnpj, web_fit, chatbot_fit, model, scored_at, error)
-       VALUES ($1, NULL, NULL, $2, now(), $3)
-       ON CONFLICT (cnpj) DO UPDATE SET
-         web_fit = NULL, chatbot_fit = NULL, model = EXCLUDED.model,
-         scored_at = now(), error = EXCLUDED.error`,
-      [cnpj, model, error]
+      `INSERT INTO scores (cnpj, offer_id, offer_version, fits, best_fit, tier,
+                           confidence, model, scored_at, error)
+       VALUES ($1, $2, $3, NULL, NULL, NULL, NULL, $4, now(), $5)
+       ON CONFLICT (cnpj, offer_id) DO UPDATE SET
+         fits = NULL, best_fit = NULL, tier = NULL, confidence = NULL,
+         model = EXCLUDED.model, scored_at = now(), error = EXCLUDED.error`,
+      [cnpj, offer.id, offer.version, model, error]
     )
   );
 }

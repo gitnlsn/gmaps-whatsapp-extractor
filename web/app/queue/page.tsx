@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getQueue, sentToday } from "@/lib/queries";
+import { activeOfferId } from "@/lib/offers";
 import { setStatus } from "@/app/actions";
 import { TierChip, SiteChip, Evidence } from "@/components/bits";
 
@@ -8,7 +9,13 @@ export const dynamic = "force-dynamic";
 const DAILY_CAP = Number(process.env.DAILY_SEND_CAP ?? 40);
 
 export default async function QueuePage() {
-  const [rows, today] = await Promise.all([getQueue(DAILY_CAP * 2), sentToday()]);
+  // The queue works one offer at a time — the active one. That is what keeps a
+  // second campaign from queueing someone the first already contacted.
+  const offerId = await activeOfferId();
+  const [rows, today] = await Promise.all([
+    getQueue(DAILY_CAP * 2, offerId),
+    sentToday(),
+  ]);
   const remaining = Math.max(0, DAILY_CAP - today);
 
   async function mark(formData: FormData) {
@@ -76,8 +83,7 @@ export default async function QueuePage() {
                 <td>
                   <SiteChip status={r.site_status} />
                 </td>
-                <td className="num">{r.web_fit ?? "—"}</td>
-                <td className="num">{r.chatbot_fit ?? "—"}</td>
+                <td className="num">{r.best_fit ?? "—"}</td>
                 <td>
                   <TierChip tier={r.tier} />
                 </td>

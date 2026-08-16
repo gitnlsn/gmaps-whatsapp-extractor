@@ -15,7 +15,6 @@
     "ibge": "tsx src/cli.ts ibge",
     "cnaes": "tsx src/cli.ts cnaes",
     "load": "tsx src/cli.ts load",
-    "plan": "tsx src/cli.ts plan",
     "enrich": "tsx src/cli.ts enrich",
     "score": "tsx src/cli.ts score",
     "queue": "tsx src/cli.ts queue",

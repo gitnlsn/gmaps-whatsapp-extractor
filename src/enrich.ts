@@ -1,4 +1,6 @@
 import { query, withClient } from "./db";
+import { extractText, runProbes } from "./offers/probes";
+import { resolveOffer } from "./offers/repo";
 
 /** Hosts that mean "they have no real website, just a link in bio". */
 const LINK_HUBS = [
@@ -103,6 +105,11 @@ export interface SiteSignals {
   footerYear: number | null;
   title: string | null;
   igHandle: string | null;
+  /**
+   * Tag-stripped homepage text, capped. Stored so that offer probes written
+   * later can be evaluated without re-fetching anyone's site.
+   */
+  textExcerpt: string | null;
   /** Filled only when --psi is passed; PageSpeed is a separate API call. */
   psiPerformance: number | null;
 }
@@ -127,6 +134,7 @@ function emptySignals(url: string | null): SiteSignals {
     footerYear: null,
     title: null,
     igHandle: null,
+    textExcerpt: null,
     psiPerformance: null,
   };
 }
@@ -195,6 +203,8 @@ export function analyzeHtml(html: string, finalUrl: string): Partial<SiteSignals
     title: titleMatch?.[1]?.replace(/\s+/g, " ").trim().slice(0, 200) ?? null,
     igHandle: igMatch && !["p", "reel", "explore"].includes(igMatch[1]) ? igMatch[1] : null,
     isHttps: finalUrl.startsWith("https://"),
+    // Stored so probes authored later can run without re-fetching the page.
+    textExcerpt: extractText(html),
   };
 }
 
@@ -295,6 +305,7 @@ export interface EnrichOptions {
   concurrency: number;
   psi: boolean;
   recheck: boolean;
+  offerId?: string;
 }
 
 async function mapLimit<T, R>(
@@ -318,6 +329,12 @@ async function mapLimit<T, R>(
 }
 
 export async function enrichLeads(opts: EnrichOptions): Promise<void> {
+  // Scoping to an offer's shortlist is what keeps this bounded. Enrichment is
+  // free in money but not in time or in other people's bandwidth: the whole
+  // base at concurrency 10 would be tens of hours of requests. Walking the
+  // ranked head of one campaign is minutes.
+  const offer = opts.offerId ? await resolveOffer(opts.offerId) : null;
+
   // Only contactable leads are worth spending requests on.
   //
   // The shared_domains CTE is the important part: an e-mail domain used by
@@ -335,19 +352,22 @@ export async function enrichLeads(opts: EnrichOptions): Promise<void> {
      SELECT l.cnpj, e.website_url AS website,
             CASE WHEN sd.domain IS NULL THEN l.email END AS email
      FROM leads l
+     ${offer ? "JOIN offer_candidates oc ON oc.cnpj = l.cnpj AND oc.offer_id = $2" : ""}
      LEFT JOIN enrichment e ON e.cnpj = l.cnpj
      LEFT JOIN shared_domains sd ON sd.domain = split_part(l.email, '@', 2)
      WHERE l.phone_e164 IS NOT NULL
        AND l.situacao = 'ATIVA'
        ${opts.recheck ? "" : "AND e.cnpj IS NULL"}
-     -- Mobiles first: they are reachable on WhatsApp, so they are worth
-     -- enriching before landlines. But a landline is a *maybe*, not a no —
-     -- institutions (schools, faculdades) register fixed lines and many run
-     -- WhatsApp Business on them, so they must not be filtered out entirely.
-     ORDER BY l.is_mobile DESC NULLS LAST,
+     -- With an offer, rank order is the whole point: enrich the best prospects
+     -- first so a run that is cut short still covered the ones that matter.
+     -- Without one, mobiles first — they are reachable on WhatsApp. A landline
+     -- is a *maybe*, not a no: institutions register fixed lines and many run
+     -- WhatsApp Business on them, so they are never filtered out entirely.
+     ORDER BY ${offer ? "oc.rank_score DESC," : ""}
+              l.is_mobile DESC NULLS LAST,
               l.data_inicio_atividade DESC NULLS LAST
      LIMIT $1`,
-    [opts.limit]
+    offer ? [opts.limit, offer.id] : [opts.limit]
   );
 
   if (rows.length === 0) {
@@ -369,7 +389,15 @@ export async function enrichLeads(opts: EnrichOptions): Promise<void> {
       signals.psiPerformance = await pageSpeed(signals.finalUrl);
     }
 
-    await upsertEnrichment(row.cnpj, signals);
+    // Probes run against the text we just fetched, keyed by offer so several
+    // campaigns can annotate the same page without overwriting each other.
+    const probeResults = offer ? runProbes(offer.spec.probes, signals.textExcerpt) : {};
+    const signalsJson =
+      offer && Object.keys(probeResults).length
+        ? JSON.stringify({ [offer.id]: probeResults })
+        : null;
+
+    await upsertEnrichment(row.cnpj, signals, signalsJson);
 
     done++;
     if (!signals.hasWebsite) noSite++;
@@ -387,19 +415,25 @@ export async function enrichLeads(opts: EnrichOptions): Promise<void> {
   );
 }
 
-export async function upsertEnrichment(cnpj: string, s: SiteSignals): Promise<void> {
+export async function upsertEnrichment(
+  cnpj: string,
+  s: SiteSignals,
+  signalsJson: string | null = null
+): Promise<void> {
   await withClient((c) =>
     c.query(
       `INSERT INTO enrichment (
          cnpj, checked_at, website_url, final_url, http_status, error,
          has_website, is_dead, is_https, is_link_hub, is_free_builder,
          has_viewport, has_contact_path, has_wa_link, has_form,
-         generator, platform, footer_year, title, ig_handle, psi_performance
+         generator, platform, footer_year, title, ig_handle, psi_performance,
+         text_excerpt, signals
        ) VALUES (
          $1, now(), $2, $3, $4, $5,
          $6, $7, $8, $9, $10,
          $11, $12, $13, $14,
-         $15, $16, $17, $18, $19, $20
+         $15, $16, $17, $18, $19, $20,
+         $21, COALESCE($22::jsonb, '{}'::jsonb)
        )
        ON CONFLICT (cnpj) DO UPDATE SET
          checked_at = now(), website_url = EXCLUDED.website_url,
@@ -412,7 +446,11 @@ export async function upsertEnrichment(cnpj: string, s: SiteSignals): Promise<vo
          generator = EXCLUDED.generator, platform = EXCLUDED.platform,
          footer_year = EXCLUDED.footer_year, title = EXCLUDED.title,
          ig_handle = EXCLUDED.ig_handle,
-         psi_performance = COALESCE(EXCLUDED.psi_performance, enrichment.psi_performance)`,
+         psi_performance = COALESCE(EXCLUDED.psi_performance, enrichment.psi_performance),
+         text_excerpt = EXCLUDED.text_excerpt,
+         -- Merge rather than replace: signals is keyed by offer, and enriching
+         -- for one campaign must not wipe another campaign's probe results.
+         signals = enrichment.signals || EXCLUDED.signals`,
       [
         cnpj,
         s.websiteUrl,
@@ -434,6 +472,8 @@ export async function upsertEnrichment(cnpj: string, s: SiteSignals): Promise<vo
         s.title,
         s.igHandle,
         s.psiPerformance,
+        s.textExcerpt,
+        signalsJson,
       ]
     )
   );

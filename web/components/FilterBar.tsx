@@ -41,13 +41,16 @@ const STATUS_OPTS = [
 export default function FilterBar({ ufs, params }: Props) {
   const v = (k: string) => params[k] ?? "";
 
+  // Product-neutral: these describe the DATA (tier, site condition, age,
+  // channel), not what is being sold. Anything offer-specific belongs in the
+  // offer's own spec, not baked into a shared component.
   const presets: [string, string][] = [
     ["?tier=hot", "🔥 hot"],
+    ["?minFit=4", "nota ≥ 4"],
     ["?site=none", "sem site"],
     ["?site=dead", "site morto"],
     ["?site=hub", "só Instagram/Linktree"],
-    ["?site=noviewport&minWeb=4", "não abre no celular"],
-    ["?minChat=4", "precisa de chatbot"],
+    ["?canal=landline", "só fixo (instituições)"],
     ["?maxIdade=2", "empresa nova (≤2 anos)"],
   ];
 
@@ -112,27 +115,11 @@ export default function FilterBar({ ufs, params }: Props) {
           ))}
         </select>
 
-        <select className="sel" name="offer" defaultValue={v("offer")}>
-          <option value="">oferta: qualquer</option>
-          <option value="site">site</option>
-          <option value="chatbot">chatbot</option>
-          <option value="both">ambos</option>
-        </select>
-
-        <select className="sel" name="minWeb" defaultValue={v("minWeb")}>
-          <option value="">web_fit ≥</option>
+        <select className="sel" name="minFit" defaultValue={v("minFit")}>
+          <option value="">nota ≥</option>
           {[5, 4, 3].map((n) => (
             <option key={n} value={n}>
-              web ≥ {n}
-            </option>
-          ))}
-        </select>
-
-        <select className="sel" name="minChat" defaultValue={v("minChat")}>
-          <option value="">chatbot_fit ≥</option>
-          {[5, 4, 3].map((n) => (
-            <option key={n} value={n}>
-              chatbot ≥ {n}
+              nota ≥ {n}
             </option>
           ))}
         </select>

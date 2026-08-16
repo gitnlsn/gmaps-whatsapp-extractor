@@ -31,6 +31,33 @@ export interface JobOptions {
   batch?: unknown;
   psi?: boolean;
   recheck?: boolean;
+  /** Offer slug. Validated against OFFER_ID_RE before it can reach argv. */
+  offer?: unknown;
+  /** Free text for `offer compile`. See the note on COMMANDS below. */
+  desc?: unknown;
+  title?: unknown;
+  finalidade?: unknown;
+}
+
+/** Mirrors the CHECK constraint on offers.id in migration 006. */
+const OFFER_ID_RE = /^[a-z0-9][a-z0-9-]{1,38}$/;
+
+/**
+ * An offer slug is the first user-influenced value to reach an argv array, so
+ * it is validated here rather than trusted. Callers additionally confirm the
+ * slug exists in the database before starting a job.
+ */
+function offerId(v: unknown): string {
+  const s = String(v ?? "").trim();
+  if (!OFFER_ID_RE.test(s)) throw new Error("slug de oferta inválido");
+  return s;
+}
+
+/** Bounded free text. Safe as one argv element; spawn never uses a shell. */
+function text(v: unknown, max: number): string {
+  const s = String(v ?? "").trim();
+  if (!s) throw new Error("texto obrigatório");
+  return s.slice(0, max);
 }
 
 /**
@@ -51,6 +78,7 @@ const COMMANDS = {
       "--concurrency", int(o.concurrency, 1, 40, 10),
       ...(o.psi ? ["--psi"] : []),
       ...(o.recheck ? ["--recheck"] : []),
+      ...(o.offer ? ["--offer", offerId(o.offer)] : []),
     ],
   },
   score: {
@@ -60,6 +88,27 @@ const COMMANDS = {
       "--limit", int(o.limit, 1, 2000, 200),
       "--batch", int(o.batch, 1, 20, 10),
       ...(o.recheck ? ["--rescore"] : []),
+      ...(o.offer ? ["--offer", offerId(o.offer)] : []),
+    ],
+  },
+  // Offer work runs through the same CLI as the terminal does, so the ranking
+  // and compiling logic has exactly one implementation. The dashboard only ever
+  // reads the tables these produce.
+  "offer-compile": {
+    label: "Compilar oferta",
+    build: (o: JobOptions) => [
+      "offer", "compile",
+      "--slug", offerId(o.offer),
+      "--desc", text(o.desc, 4000),
+      "--title", text(o.title ?? o.offer, 120),
+      ...(o.finalidade ? ["--finalidade", text(o.finalidade, 1000)] : []),
+    ],
+  },
+  "offer-shortlist": {
+    label: "Montar shortlist",
+    build: (o: JobOptions) => [
+      "offer", "shortlist", offerId(o.offer),
+      "--limit", int(o.limit, 1, 50000, 5000),
     ],
   },
   places: {
@@ -82,6 +131,8 @@ export const JOB_LABELS: Record<JobKind, string> = {
   enrich: COMMANDS.enrich.label,
   score: COMMANDS.score.label,
   places: COMMANDS.places.label,
+  "offer-compile": COMMANDS["offer-compile"].label,
+  "offer-shortlist": COMMANDS["offer-shortlist"].label,
 };
 
 export interface JobRow {
@@ -162,7 +213,14 @@ export async function startJob(kind: JobKind, opts: JobOptions): Promise<StartRe
   const spec = COMMANDS[kind];
   if (!spec) return { ok: false, reason: "comando desconhecido" };
 
-  const args = spec.build(opts);
+  // Argument validation rejects rather than coerces, and a rejection is an
+  // expected outcome the UI shows — not a crash.
+  let args: string[];
+  try {
+    args = spec.build(opts);
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
 
   let job: { id: number } | undefined;
   try {

@@ -1,6 +1,6 @@
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-export type Task = "score" | "plan" | "draft";
+export type Task = "score" | "plan" | "draft" | "compile";
 
 /**
  * Free-tier defaults. Every model here costs $0 on OpenRouter and supports
@@ -18,6 +18,9 @@ const DEFAULT_MODELS: Record<Task, string> = {
   // Quality work: the largest free model that supports structured outputs.
   plan: "nvidia/nemotron-3-super-120b-a12b:free",
   draft: "nvidia/nemotron-3-super-120b-a12b:free",
+  // Runs once per offer, and its output defines an entire campaign — worth the
+  // biggest model available.
+  compile: "nvidia/nemotron-3-super-120b-a12b:free",
 };
 
 /** Free models share a 20 req/min ceiling; serialize with a floor delay. */
@@ -207,14 +210,22 @@ export async function complete(
       continue;
     }
 
-    return {
-      text,
-      model,
-      usage: {
-        promptTokens: data.usage?.prompt_tokens ?? 0,
-        completionTokens: data.usage?.completion_tokens ?? 0,
-      },
+    const usage = {
+      promptTokens: data.usage?.prompt_tokens ?? 0,
+      completionTokens: data.usage?.completion_tokens ?? 0,
     };
+
+    // Recorded here rather than at the call sites so nothing can spend without
+    // being counted. A bookkeeping failure must never lose a completed call, so
+    // it is swallowed — the request happened either way.
+    try {
+      const { recordUsage } = await import("./llmBudget");
+      await recordUsage(model, opts.task, usage.promptTokens, usage.completionTokens);
+    } catch {
+      /* never let accounting break a successful call */
+    }
+
+    return { text, model, usage };
   }
 
   throw lastErr ?? new LlmError("OpenRouter call failed");

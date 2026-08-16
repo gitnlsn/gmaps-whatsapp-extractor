@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getLeads, getStats, getUfs, type Filters } from "@/lib/queries";
+import { activeOfferId, getOffer } from "@/lib/offers";
 import FilterBar from "@/components/FilterBar";
 import StatStrip from "@/components/StatStrip";
 import { TierChip, SiteChip, Evidence, Fit, SortHeader, Pager } from "@/components/bits";
@@ -19,10 +20,17 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
   const params: Record<string, string | undefined> = {};
   for (const k of [
     "q", "uf", "municipio", "cnae", "tier", "offer", "site", "status", "canal",
-    "minWeb", "minChat", "mei", "maxIdade", "sort", "dir", "page",
+    "minFit", "mei", "maxIdade", "sort", "dir", "page",
   ]) {
     params[k] = one(sp[k]);
   }
+
+  // Scores belong to an offer, so the table's fit columns are whatever that
+  // offer's rubric declared. No offer, no fit columns — which is honest: an
+  // unscored lead has no fit, it does not have a zero.
+  const offerId = params.offer ?? (await activeOfferId());
+  const offer = offerId ? await getOffer(offerId) : undefined;
+  const axes = offer?.axes ?? [];
 
   const filters: Filters = {
     q: params.q,
@@ -35,8 +43,8 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     status: params.status,
     canal: params.canal,
     mei: params.mei,
-    minWeb: params.minWeb ? Number(params.minWeb) : undefined,
-    minChat: params.minChat ? Number(params.minChat) : undefined,
+    minFit: params.minFit ? Number(params.minFit) : undefined,
+    offerId,
     maxIdade: params.maxIdade ? Number(params.maxIdade) : undefined,
     sort: params.sort,
     dir: params.dir === "asc" ? "asc" : "desc",
@@ -78,8 +86,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
               {th("porte", "porte")}
               <th>telefone</th>
               <th>site</th>
-              {th("web", "web_fit", "num")}
-              {th("bot", "chatbot_fit", "num")}
+              {axes.map((a) => (
+                <th key={a.key} className="num" title={a.question}>
+                  {a.label}
+                </th>
+              ))}
               {th("tier", "tier")}
               <th>conf</th>
               <th>oferta</th>
@@ -119,12 +130,11 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
                 <td>
                   <SiteChip status={r.site_status} />
                 </td>
-                <td className="num">
-                  <Fit n={r.web_fit} />
-                </td>
-                <td className="num">
-                  <Fit n={r.chatbot_fit} />
-                </td>
+                {axes.map((a) => (
+                  <td key={a.key} className="num">
+                    <Fit n={r.fits?.[a.key] ?? null} />
+                  </td>
+                ))}
                 <td>
                   <TierChip tier={r.tier} />
                 </td>

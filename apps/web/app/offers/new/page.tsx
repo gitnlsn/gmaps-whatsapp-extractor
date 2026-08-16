@@ -13,11 +13,12 @@ export default function NewOfferPage() {
         </Link>
       </div>
       <p className="muted" style={{ marginBottom: 16, fontSize: 12, maxWidth: 760 }}>
-        O modelo traduz a descrição em um perfil de cliente ideal: quais CNAEs procurar, que
-        empresas descartar e como pontuar cada uma. Ele erra — inventa código de CNAE e costuma
-        pegar segmentos vizinhos demais —, então tudo é conferido contra os dados que você
-        realmente carregou antes de valer alguma coisa. Você revisa antes de gastar qualquer
-        outra chamada.
+        O modelo traduz o que você escrever em quais CNAEs procurar, que empresas descartar e
+        como pontuar cada uma — e já monta a lista ranqueada. Ele erra: inventa código de CNAE
+        e costuma pegar segmentos vizinhos demais. Por isso tudo é conferido contra os dados
+        que você realmente carregou, e a página seguinte mostra o que ele mirou, quantas
+        empresas isso alcança, e quais critérios do seu perfil <em>não</em> viraram filtro.
+        Só depois disso é que gastar faz sentido.
       </p>
       <NewOfferForm />
     </>

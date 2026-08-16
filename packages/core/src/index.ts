@@ -37,6 +37,7 @@ export { loadCnaes, loadReceita, latestPeriod, classifyPending, type LoadOptions
 export {
   compileOffer,
   validateCnaes,
+  type CompileInput,
   type CompileOptions,
   type CompileResult,
   type CnaeCheck,
@@ -56,6 +57,7 @@ export { refreshRollups, refreshRollupsQuietly } from "./usecases/refreshRollups
 export {
   runOfferPipeline,
   type RunPipelineOptions,
+  type CompileStepInput,
   type PipelineResult,
   type Step,
   type StepKey,

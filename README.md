@@ -57,6 +57,7 @@ pnpm web                    # dashboard em http://localhost:3100
 | `pnpm leads export leads.csv` | exporta para CSV |
 | `pnpm leads stats` | estado do pipeline e gasto com API do Google |
 | `pnpm leads models` | lista os modelos gratuitos do OpenRouter agora |
+| `pnpm leads offer new --slug x --desc "..." --icp "..."` | da ideia à lista ranqueada, só o que é grátis |
 | `pnpm leads offer run <slug>` | roda a campanha inteira em ordem, e para na revisão |
 | `pnpm web` | dashboard Next.js |
 | `pnpm test` | testes de integração contra o Postgres do compose |
@@ -229,6 +230,7 @@ linkável e o servidor faz o trabalho (importa quando a tabela tem milhões de l
 | `/` | tabela principal, com barra de filtros e atalhos |
 | `/discover` | quantas empresas existem num segmento e quantas dá para contatar |
 | `/lead/[cnpj]` | ficha completa: cadastro, sinais do site, pontuação, procedência |
+| `/offers/new` | escreva a ideia e o cliente ideal; sai com a lista ranqueada |
 | `/offers/[slug]` | cockpit da campanha: checklist do pipeline, CNAEs, rubrica, ranking |
 | `/queue` | fila do dia, com limite diário e ações inline |
 | `/coverage` | onde há leads e onde o enriquecimento ainda não chegou |
@@ -256,6 +258,46 @@ decorrido e um botão de cancelar. Quando termina, as tabelas se atualizam sozin
 - O botão do Google mostra a cota grátis restante e se desabilita no zero. Quem realmente
   impede o gasto continua sendo `packages/core/src/services/budget.ts`.
 - `histórico ▾` lista os últimos 10 runs com status e duração.
+
+### Da ideia à lista ranqueada
+
+`/offers/new` recebe duas coisas: **o que é o produto** e **o perfil do cliente ideal** — em
+português, do jeito que você explicaria para alguém. Enviar dispara um job só, que compila,
+confere e ranqueia:
+
+```
+compilar → conferir CNAEs → montar shortlist
+```
+
+Isso é tudo que roda sozinho, de propósito. São 2 chamadas ao modelo e o resto é SQL.
+Enriquecer sites e pontuar ficam para o cockpit, atrás de botões com o custo escrito, porque
+**o compilador inventa código de CNAE** — não é um talvez. Você vê o que ele mirou e quantas
+empresas isso alcança antes de gastar.
+
+Pelo terminal:
+
+```bash
+pnpm leads offer new --slug padarias-estoque \
+  --desc "Controle de estoque e validade para padarias, avisa no WhatsApp..." \
+  --icp "padarias de bairro, não-MEI, que já tenham site próprio" \
+  --finalidade "..."
+```
+
+#### O que o seu perfil virou, e o que não virou
+
+O painel "Do seu perfil de cliente ideal" mostra critério por critério onde cada um entrou:
+
+```
+ filtro   escolas particulares de ensino médio   CNAE 8520, naturezaPrefixes 2,3
+ filtro   não-MEI                                excludeMei
+ filtro   que já tenham portal do aluno no site  probe: portal do aluno
+ não deu  com mais de 50 funcionários            a base não traz número de funcionários
+```
+
+As linhas **não deu** são o motivo do painel existir. A Receita não tem quadro de pessoal,
+faturamento, stack nem bairro — só município/UF. Um critério desses simplesmente não vira
+filtro, e antes disso sumia calado: a lista saía mais ampla do que o perfil pedia e nada
+avisava. Agora avisa, e a triagem daquele critério é sua, na revisão.
 
 ### A campanha inteira numa página
 

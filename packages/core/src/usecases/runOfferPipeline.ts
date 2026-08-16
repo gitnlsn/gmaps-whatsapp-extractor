@@ -1,6 +1,6 @@
 import type { Deps } from "../ports/index";
-import { resolveOffer, type LoadedOffer } from "./offerRepo";
-import { validateCnaes } from "./compileOffer";
+import { resolveOffer, saveSpec, setActive, type LoadedOffer } from "./offerRepo";
+import { compileOffer, validateCnaes } from "./compileOffer";
 import { buildShortlist } from "./shortlist";
 import { runPlacesEnrichment } from "./runPlaces";
 import { enrichLeads } from "./enrichLeads";
@@ -26,6 +26,8 @@ import { LlmBudgetExceededError } from "../services/llmBudget";
  */
 
 export type StepKey =
+  | "compile"
+  | "cnaeCheck"
   | "load"
   | "shortlist"
   | "places"
@@ -45,8 +47,22 @@ export interface Step {
   finishedAt?: string;
 }
 
+/**
+ * Compile the offer as the pipeline's first step, instead of requiring one to
+ * already exist. This is what makes "describe the idea, get ranked companies"
+ * a single run rather than three manual hops.
+ */
+export interface CompileStepInput {
+  slug: string;
+  title?: string;
+  finalidade: string;
+  description: string;
+  idealCustomer?: string;
+}
+
 export interface RunPipelineOptions {
   offerId?: string;
+  compile?: CompileStepInput;
   /** 0 disables the stage. Places is 0 by default: it is the one that bills. */
   places?: number;
   enrich?: number;
@@ -75,6 +91,8 @@ export interface PipelineResult {
 }
 
 const LABELS: Record<StepKey, string> = {
+  compile: "Compilar a ideia em perfil de cliente",
+  cnaeCheck: "Conferir CNAEs contra os dados carregados",
   load: "Carregar dados da Receita",
   shortlist: "Montar shortlist",
   places: "Buscar sites no Google",
@@ -99,7 +117,17 @@ export async function runOfferPipeline(
   deps: Deps,
   opts: RunPipelineOptions = {}
 ): Promise<PipelineResult> {
-  const offer = await resolveOffer(deps, opts.offerId);
+  // With a compile step the offer does not exist yet — it is what this run is
+  // about to produce. Everything downstream reads `offer` through `current()`,
+  // which is filled in the moment the compile step lands.
+  let offer: LoadedOffer | undefined = opts.compile
+    ? undefined
+    : await resolveOffer(deps, opts.offerId);
+  const offerId = opts.compile?.slug ?? offer!.id;
+  const current = (): LoadedOffer => {
+    if (!offer) throw new Error("a oferta ainda não foi compilada");
+    return offer;
+  };
 
   const places = opts.places ?? 0;
   const enrich = opts.enrich ?? 500;
@@ -107,9 +135,12 @@ export async function runOfferPipeline(
   const shortlistLimit = opts.shortlistLimit ?? 5000;
   const reshortlist = opts.reshortlist !== false;
 
-  const missing = opts.withLoad ? await missingCnaes(deps, offer) : [];
+  // Only knowable up front when the offer already exists; with a compile step
+  // there are no CNAEs to check until the model has produced them.
+  const missing = opts.withLoad && offer ? await missingCnaes(deps, offer) : [];
 
   const steps: Step[] = [
+    ...(opts.compile ? [step("compile"), step("cnaeCheck")] : []),
     ...(opts.withLoad && missing.length ? [step("load")] : []),
     step("shortlist"),
     ...(places > 0 ? [step("places")] : []),
@@ -120,7 +151,7 @@ export async function runOfferPipeline(
   ];
 
   if (opts.dryRun) {
-    deps.progress.info(`Plano para "${offer.id}" (${steps.length} passos):`);
+    deps.progress.info(`Plano para "${offerId}" (${steps.length} passos):`);
     for (const s of steps) deps.progress.info(`  - ${s.label}`);
     if (missing.length) {
       deps.progress.warn(
@@ -130,10 +161,10 @@ export async function runOfferPipeline(
     deps.progress.info("--dry-run: nada foi executado.");
     // No pipeline_runs row: a dry run that recorded one would sit at 'running'
     // forever and read as a pipeline that never finished.
-    return { runId: 0, offerId: offer.id, steps, status: "done" };
+    return { runId: 0, offerId, steps, status: "done" };
   }
 
-  const runId = opts.runId ?? (await createRun(deps, offer.id, steps, opts.jobId));
+  const runId = opts.runId ?? (await createRun(deps, offerId, steps, opts.jobId));
 
   // SIGTERM stops the pipeline BETWEEN stages, never inside one. Every stage is
   // resumable — they all skip rows they already processed — so the next run
@@ -159,7 +190,7 @@ export async function runOfferPipeline(
       await saveSteps(deps, runId, steps);
 
       try {
-        s.note = await runStep(deps, s.key, offer, {
+        s.note = await runStep(deps, s.key, current, {
           places,
           enrich,
           score,
@@ -168,6 +199,11 @@ export async function runOfferPipeline(
           missing,
           llmDailyRequests: opts.llmDailyRequests,
           psiApiKey: opts.psiApiKey,
+          compile: opts.compile,
+          offerId,
+          onCompiled: (o) => {
+            offer = o;
+          },
         });
         s.status = "done";
       } catch (err) {
@@ -180,7 +216,7 @@ export async function runOfferPipeline(
           s.note = (err as Error).message.slice(0, 400);
           s.finishedAt = new Date().toISOString();
           await finishRun(deps, runId, steps, "failed", (err as Error).message);
-          return { runId, offerId: offer.id, steps, status: "failed" };
+          return { runId, offerId, steps, status: "failed" };
         }
       }
 
@@ -195,13 +231,13 @@ export async function runOfferPipeline(
   const status = stopping ? "cancelled" : "done";
   await finishRun(deps, runId, steps, status);
 
-  const ready = await readyForReview(deps, offer.id);
+  const ready = await readyForReview(deps, offerId);
   deps.progress.info(
-    `Pipeline de "${offer.id}" concluído. ${ready} lead(s) pontuados aguardando SUA revisão — ` +
+    `Pipeline de "${offerId}" concluído. ${ready} lead(s) pontuados aguardando SUA revisão — ` +
       `nada foi enviado.`
   );
 
-  return { runId, offerId: offer.id, steps, status };
+  return { runId, offerId, steps, status };
 }
 
 interface StageArgs {
@@ -213,15 +249,79 @@ interface StageArgs {
   missing: string[];
   llmDailyRequests?: number;
   psiApiKey?: string;
+  compile?: CompileStepInput;
+  offerId: string;
+  /** Publishes the offer the compile step just created to the rest of the run. */
+  onCompiled: (offer: LoadedOffer) => void;
 }
 
 async function runStep(
   deps: Deps,
   key: StepKey,
-  offer: LoadedOffer,
+  current: () => LoadedOffer,
   args: StageArgs
 ): Promise<string | undefined> {
   switch (key) {
+    case "compile": {
+      const c = args.compile!;
+      const { spec, model, icpCoverage } = await compileOffer(
+        deps,
+        { description: c.description, idealCustomer: c.idealCustomer },
+        { llmDailyRequests: args.llmDailyRequests }
+      );
+
+      await saveSpec(deps, {
+        offerId: c.slug,
+        title: c.title ?? c.slug,
+        description: c.description,
+        finalidade: c.finalidade,
+        spec,
+        compiledBy: `llm:${model}`,
+        icpText: c.idealCustomer,
+        icpCoverage,
+      });
+      // Made active so the queue, the coverage page and the main table all point
+      // at the campaign the operator just created rather than the previous one.
+      await setActive(deps, c.slug);
+
+      const offer = await resolveOffer(deps, c.slug);
+      args.onCompiled(offer);
+
+      const unmapped = icpCoverage.filter((i) => !i.mapped).length;
+      return (
+        `${spec.targeting.cnaePrefixes.length} CNAE, ` +
+        `${spec.rubric.axes.length} eixo(s)` +
+        (unmapped ? `, ${unmapped} critério(s) do perfil sem filtro possível` : "")
+      );
+    }
+    case "cnaeCheck": {
+      // Free, and the gate that separates "the model found the target" from
+      // "the model invented a code". Never fatal: a bad prefix costs reach, and
+      // the operator decides what to do about it on the page.
+      const offer = current();
+      const checks = await validateCnaes(
+        deps,
+        offer.spec.targeting.cnaePrefixes,
+        offer.spec.targeting.channels
+      );
+      const ok = checks.filter((c) => c.status === "ok");
+      const notLoaded = checks.filter((c) => c.status === "not_loaded");
+      const unknown = checks.filter((c) => c.status === "unknown");
+      const reach = ok.reduce((n, c) => n + c.reachable, 0);
+
+      for (const c of unknown) {
+        deps.progress.warn(`CNAE ${c.prefix} não existe na tabela oficial — o modelo inventou.`);
+      }
+      for (const c of notLoaded) {
+        deps.progress.warn(`CNAE ${c.prefix} existe, mas esse recorte não foi carregado.`);
+      }
+
+      return (
+        `${ok.length} ok (${reach.toLocaleString("pt-BR")} contatáveis)` +
+        (notLoaded.length ? `, ${notLoaded.length} não carregado(s)` : "") +
+        (unknown.length ? `, ${unknown.length} inexistente(s)` : "")
+      );
+    }
     case "load": {
       await loadReceita(deps, { cnae: args.missing, parts: [0] });
       return `CNAE ${args.missing.join(", ")}`;
@@ -229,7 +329,7 @@ async function runStep(
     case "shortlist":
     case "reshortlist": {
       // Reloaded so a re-rank sees whatever the enrich stage just wrote.
-      const fresh = await resolveOffer(deps, offer.id);
+      const fresh = await resolveOffer(deps, current().id);
       const n = await buildShortlist(deps, fresh, args.shortlistLimit);
       return `${n.toLocaleString("pt-BR")} empresas ranqueadas`;
     }
@@ -242,7 +342,7 @@ async function runStep(
         allowPaid: false,
         dryRun: false,
         recheck: false,
-        offerId: offer.id,
+        offerId: current().id,
       });
       return `${r.found} encontrados, ${r.withSite} com site`;
     }
@@ -252,7 +352,7 @@ async function runStep(
         concurrency: 10,
         psi: false,
         recheck: false,
-        offerId: offer.id,
+        offerId: current().id,
         psiApiKey: args.psiApiKey,
       });
       return `${r.checked} verificados, ${r.ok} ok`;
@@ -263,7 +363,7 @@ async function runStep(
         limit: args.score,
         batchSize: args.scoreBatch,
         rescore: false,
-        offerId: offer.id,
+        offerId: current().id,
         llmDailyRequests: args.llmDailyRequests,
       });
       return `${r.scored} pontuados, ${r.tiers.hot ?? 0} hot`;

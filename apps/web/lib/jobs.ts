@@ -44,6 +44,8 @@ export interface JobOptions {
   desc?: unknown;
   title?: unknown;
   finalidade?: unknown;
+  /** The operator's ideal-customer profile, free text. */
+  icp?: unknown;
   /** Per-stage sizes for `offer run`. */
   places?: unknown;
   enrich?: unknown;
@@ -123,6 +125,21 @@ const COMMANDS = {
       ...(o.finalidade ? ["--finalidade", text(o.finalidade, 1000)] : []),
     ],
   },
+  // Idea in, ranked companies out — but only the free half. Compiling costs two
+  // LLM calls; checking the CNAEs and ranking cost nothing. Scoring and Places
+  // are deliberately not reachable here: the model invents CNAE codes, so the
+  // operator sees what it targeted before any of it is paid for.
+  "offer-new": {
+    label: "Nova campanha",
+    build: (o: JobOptions) => [
+      "offer", "new",
+      "--slug", offerId(o.offer),
+      "--desc", text(o.desc, 4000),
+      "--title", text(o.title ?? o.offer, 120),
+      "--finalidade", text(o.finalidade, 1000),
+      ...(o.icp ? ["--icp", text(o.icp, 2000)] : []),
+    ],
+  },
   "offer-shortlist": {
     label: "Montar shortlist",
     build: (o: JobOptions) => [
@@ -177,6 +194,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   score: COMMANDS.score.label,
   places: COMMANDS.places.label,
   "offer-compile": COMMANDS["offer-compile"].label,
+  "offer-new": COMMANDS["offer-new"].label,
   "offer-shortlist": COMMANDS["offer-shortlist"].label,
   "offer-run": COMMANDS["offer-run"].label,
   "refresh-rollups": COMMANDS["refresh-rollups"].label,
@@ -290,7 +308,7 @@ export async function startJob(kind: JobKind, opts: JobOptions): Promise<StartRe
   // only useful to the UI if it can be tied back to this job's log and cancel
   // button. The id does not exist until the INSERT above, so it is appended
   // here and written back so `args` still shows exactly what ran.
-  if (kind === "offer-run") {
+  if (kind === "offer-run" || kind === "offer-new") {
     args = [...args, "--job", String(jobId)];
     await sql(`UPDATE jobs SET args = $2 WHERE id = $1`, [jobId, args]);
   }

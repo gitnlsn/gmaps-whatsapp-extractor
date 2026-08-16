@@ -31,6 +31,7 @@ import {
   topCandidates,
   usageReport,
   validateCnaes,
+  type IcpCriterion,
   type Deps,
 } from "@leads/core";
 import { buildDeps, llmDailyRequests, psiApiKey } from "./deps";
@@ -344,14 +345,18 @@ offer
     "-f, --finalidade <text>",
     "LGPD: the declared purpose of contacting these companies (required for legitimate interest)"
   )
+  .option("-i, --icp <text>", "Who the ideal customer is, in your own words")
   .option("--activate", "Make this the active offer after compiling")
   .action((opts: Record<string, string | boolean>) =>
     run(async (d) => {
       const description = String(opts.desc);
       console.log("Compilando descrição em perfil de cliente ideal (2 chamadas)...");
-      const { spec, model, rationale } = await compileOffer(d, description, {
-        llmDailyRequests: llmDailyRequests(),
-      });
+      const idealCustomer = opts.icp ? String(opts.icp) : undefined;
+      const { spec, model, rationale, icpCoverage } = await compileOffer(
+        d,
+        { description, idealCustomer },
+        { llmDailyRequests: llmDailyRequests() }
+      );
 
       console.log(`\nEtapa: ${spec.stage}`);
       console.log(`Resumo: ${spec.summary}`);
@@ -359,6 +364,7 @@ offer
       if (rationale) console.log(`Racional do alvo: ${rationale}`);
       console.log(`Canais: ${spec.targeting.channels.join(", ")}`);
       console.log(`Eixos: ${spec.rubric.axes.map((a) => `${a.key} (${a.label})`).join(", ")}`);
+      printIcpCoverage(icpCoverage);
 
       // Never let a hallucinated CNAE silently define a campaign.
       console.log(`\nConferindo CNAEs contra os dados carregados:`);
@@ -391,6 +397,8 @@ offer
         ),
         spec,
         compiledBy: `llm:${model}`,
+        icpText: idealCustomer,
+        icpCoverage,
       });
 
       console.log(`\nSalvo como "${opts.slug}" v${version}.`);
@@ -405,6 +413,59 @@ offer
           `  pnpm leads offer shortlist ${opts.slug}\n` +
           `  pnpm leads offer top ${opts.slug}`
       );
+    })
+  );
+
+offer
+  .command("new")
+  .description(
+    "From an idea to a ranked list in one go: compile, check the CNAEs, build the\n" +
+      "shortlist. Only the free stages — scoring and Places stay a separate decision."
+  )
+  .requiredOption("-s, --slug <id>", "Short id, e.g. simulados-edu")
+  .requiredOption("-d, --desc <text>", "What the product is, in plain Portuguese")
+  .requiredOption(
+    "-f, --finalidade <text>",
+    "LGPD: the declared purpose of contacting these companies"
+  )
+  .option("-i, --icp <text>", "Who the ideal customer is, in your own words")
+  .option("-t, --title <text>", "Human-readable name")
+  .option("--shortlist <n>", "How many to rank", "5000")
+  .option("--job <id>", "Link this run to a dashboard job row")
+  .option("--dry-run", "Print the plan and exit")
+  .action((opts: Record<string, string | boolean>) =>
+    run(async (d) => {
+      const result = await runOfferPipeline(d, {
+        compile: {
+          slug: String(opts.slug),
+          title: opts.title ? String(opts.title) : undefined,
+          finalidade: String(opts.finalidade),
+          description: String(opts.desc),
+          idealCustomer: opts.icp ? String(opts.icp) : undefined,
+        },
+        // The free path, by definition. Spending is a separate, labelled click.
+        places: 0,
+        enrich: 0,
+        score: 0,
+        reshortlist: false,
+        shortlistLimit: parseInt(String(opts.shortlist), 10),
+        jobId: opts.job ? parseInt(String(opts.job), 10) : undefined,
+        llmDailyRequests: llmDailyRequests(),
+        dryRun: Boolean(opts.dryRun),
+      });
+
+      printSteps(result.steps);
+      if (result.status === "failed") {
+        process.exitCode = 1;
+        return;
+      }
+      if (!opts.dryRun) {
+        console.log(
+          `\nPróximos passos (agora sim custam):\n` +
+            `  pnpm leads offer run ${opts.slug} --enrich 500 --score 200\n` +
+            `  ou abra http://localhost:3100/offers/${opts.slug}`
+        );
+      }
     })
   );
 
@@ -440,11 +501,7 @@ offer
         dryRun: Boolean(opts.dryRun),
       });
 
-      for (const s of result.steps) {
-        const mark =
-          s.status === "done" ? "✔" : s.status === "skipped" ? "·" : s.status === "failed" ? "✖" : "…";
-        console.log(`  ${mark} ${s.label}${s.note ? ` — ${s.note}` : ""}`);
-      }
+      printSteps(result.steps);
       if (result.status === "failed") process.exitCode = 1;
     })
   );
@@ -646,6 +703,31 @@ program
       printUsage(await usageReport(d.db));
     })
   );
+
+function printSteps(steps: { status: string; label: string; note?: string }[]): void {
+  for (const s of steps) {
+    const mark =
+      s.status === "done" ? "✔" : s.status === "skipped" ? "·" : s.status === "failed" ? "✖" : "…";
+    console.log(`  ${mark} ${s.label}${s.note ? ` — ${s.note}` : ""}`);
+  }
+}
+
+/**
+ * What the written ideal-customer profile became.
+ *
+ * The unmapped lines are the ones worth printing: the base has no headcount,
+ * revenue or tooling, so a criterion that asks for them produced no filter at
+ * all — and an operator who does not know that reads the shortlist as narrower
+ * than it is.
+ */
+function printIcpCoverage(coverage: IcpCriterion[]): void {
+  if (!coverage.length) return;
+  console.log(`\nDo seu perfil de cliente ideal:`);
+  for (const c of coverage) {
+    console.log(`  ${c.mapped ? "✔" : "✖"} ${c.criterion}`);
+    if (c.mappedTo) console.log(`      ${c.mapped ? "→" : "—"} ${c.mappedTo}`);
+  }
+}
 
 /** The Google spend report. Formatting lives here; the core returns numbers. */
 function printUsage(usage: Awaited<ReturnType<typeof usageReport>>): void {

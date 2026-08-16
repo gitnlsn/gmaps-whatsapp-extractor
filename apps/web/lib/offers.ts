@@ -1,5 +1,6 @@
 import "server-only";
 import { sql, sqlOne } from "./db";
+import type { IcpCriterion } from "@leads/core/domain";
 
 /**
  * Read-only views over the offers tables.
@@ -103,9 +104,17 @@ export async function getActiveOffer(): Promise<OfferSummary | undefined> {
   return r ? shape(r) : undefined;
 }
 
-export async function getOfferSpec(id: string): Promise<{ spec: unknown; description: string; finalidade: string } | undefined> {
+export async function getOfferSpec(id: string): Promise<
+  {
+    spec: unknown;
+    description: string;
+    finalidade: string;
+    icp_text: string | null;
+    icp_coverage: IcpCriterion[] | null;
+  } | undefined
+> {
   return sqlOne(
-    `SELECT s.spec, s.description, s.finalidade
+    `SELECT s.spec, s.description, s.finalidade, s.icp_text, s.icp_coverage
        FROM offers o JOIN offer_specs s
          ON s.offer_id = o.id AND s.version = o.current_version
       WHERE o.id = $1`,

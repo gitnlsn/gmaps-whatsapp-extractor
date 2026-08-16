@@ -9,6 +9,8 @@ import {
   readyForReview,
 } from "@/lib/offers";
 import PipelinePanel from "./PipelinePanel";
+import AwaitingCampaign from "./AwaitingCampaign";
+import IcpCoverage from "./IcpCoverage";
 
 export const dynamic = "force-dynamic";
 
@@ -30,23 +32,9 @@ export default async function OfferPage({
 
   const offer = await getOffer(slug);
   if (!offer) {
-    // A compile job may still be running; the row appears only when it lands.
-    if (awaiting) {
-      return (
-        <>
-          <h1 style={{ fontSize: 16, fontWeight: 650, marginBottom: 6 }}>Compilando “{slug}”…</h1>
-          <p className="muted" style={{ fontSize: 12 }}>
-            O modelo está traduzindo a descrição em um perfil de cliente. Acompanhe o log no painel
-            acima e recarregue esta página quando terminar.
-          </p>
-          <p style={{ marginTop: 10 }}>
-            <Link className="link" href={`/offers/${slug}?awaiting=1`}>
-              recarregar
-            </Link>
-          </p>
-        </>
-      );
-    }
+    // The campaign job may still be running; the row appears the moment its
+    // compile step commits, and the awaiting view follows that live.
+    if (awaiting) return <AwaitingCampaign slug={slug} />;
     notFound();
   }
 
@@ -87,6 +75,8 @@ export default async function OfferPage({
         missingCnaes={notLoaded.map((c) => c.prefix)}
         initialRun={run}
       />
+
+      <IcpCoverage icpText={specRow?.icp_text ?? null} coverage={specRow?.icp_coverage ?? null} />
 
       {unknown.length > 0 && (
         <div className="panel" style={{ padding: 10, marginBottom: 12 }}>

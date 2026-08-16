@@ -90,6 +90,10 @@ export interface SaveSpecInput {
   spec: OfferSpec;
   compiledBy: string;
   note?: string;
+  /** The operator's ideal-customer profile, verbatim. */
+  icpText?: string;
+  /** What the compiler made of it, criterion by criterion. */
+  icpCoverage?: unknown;
 }
 
 /** Inserts a new spec version and points the offer at it. Never overwrites. */
@@ -115,8 +119,9 @@ export async function saveSpec(deps: Deps, input: SaveSpecInput): Promise<number
 
       await c.query(
         `INSERT INTO offer_specs
-           (offer_id, version, description, finalidade, spec, compiled_by, note)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (offer_id, version, description, finalidade, spec, compiled_by, note,
+            icp_text, icp_coverage)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           input.offerId,
           version,
@@ -125,6 +130,8 @@ export async function saveSpec(deps: Deps, input: SaveSpecInput): Promise<number
           JSON.stringify(spec),
           input.compiledBy,
           input.note ?? null,
+          input.icpText ?? null,
+          input.icpCoverage ? JSON.stringify(input.icpCoverage) : null,
         ]
       );
 

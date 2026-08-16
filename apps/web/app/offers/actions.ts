@@ -27,14 +27,20 @@ function slugify(v: string): string {
 export type ActionResult = { ok: true; jobId?: number } | { ok: false; reason: string };
 
 /**
- * Compiles a free-text product description into an offer.
+ * Turns a written idea into a ranked list of companies.
  *
- * Runs as a job rather than inline: two calls against a free model that is
- * throttled to ~3.2s between requests can take a minute, which is far too long
- * to hold a request open. JobPanel already streams the log.
+ * Runs as a job rather than inline: compiling is two calls against a free model
+ * throttled to ~3.2s per request, and the ranking scan that follows walks
+ * millions of rows — far too long to hold a request open. The job writes its
+ * progress to `pipeline_runs`, which is what the awaiting page reads.
+ *
+ * It stops after the free stages on purpose. The compiler invents CNAE codes —
+ * that is not a maybe — so the operator sees what it actually targeted, and how
+ * many companies that reaches, before anything is paid for.
  */
-export async function compileOfferAction(formData: FormData): Promise<ActionResult> {
+export async function startCampaignAction(formData: FormData): Promise<ActionResult> {
   const desc = String(formData.get("desc") ?? "").trim();
+  const icp = String(formData.get("icp") ?? "").trim();
   const title = String(formData.get("title") ?? "").trim();
   const finalidade = String(formData.get("finalidade") ?? "").trim();
   const rawSlug = String(formData.get("slug") ?? "").trim();
@@ -58,9 +64,10 @@ export async function compileOfferAction(formData: FormData): Promise<ActionResu
     return { ok: false, reason: `Já existe uma oferta "${slug}". Escolha outro identificador.` };
   }
 
-  const result = await startJob("offer-compile", {
+  const result = await startJob("offer-new", {
     offer: slug,
     desc,
+    icp: icp || undefined,
     title: title || slug,
     finalidade,
   });

@@ -15,3 +15,4 @@ export * from "./probes";
 export * from "./prompt";
 export * from "./legacy";
 export * from "./csv";
+export * from "./icp";

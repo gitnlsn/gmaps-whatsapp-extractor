@@ -1,6 +1,7 @@
 import { requireLlm, type Deps } from "../ports/index";
 import { createLlmBudget } from "../services/llmBudget";
 import { parseOfferSpec, type OfferSpec } from "../domain/spec";
+import type { IcpCriterion } from "../domain/icp";
 
 /**
  * Turns a free-text product description into a structured OfferSpec.
@@ -55,12 +56,27 @@ excludeMei: MEI é uma pessoa só. Para venda institucional, quase sempre true.
 
 probes: palavras EXATAS em português que apareceriam no SITE da própria empresa
 e que indicam o problema que o produto resolve, ou que ela já compra software
-desse tipo. Termos literais, sem regex, sem curinga.`;
+desse tipo. Termos literais, sem regex, sem curinga.
+
+icpCoverage — quando vier um PERFIL DE CLIENTE IDEAL escrito pelo operador:
+- Quebre o perfil em critérios distintos, um item por critério, nas palavras dele.
+- Para cada um, diga se deu para expressá-lo com os campos acima.
+- mapped=true: em mappedTo escreva ONDE ele entrou, concreto —
+  "CNAE 8520", "excludeMei", "naturezaPrefixes 2,3", "probe: portal do aluno".
+- mapped=false: em mappedTo escreva POR QUE não deu, citando o dado que falta —
+  "a base não traz quadro de pessoal", "não existe faturamento nos dados abertos".
+- NUNCA finja que mapeou. Um critério declarado como filtro que não virou filtro é
+  pior do que um critério assumidamente ignorado: o operador vai supor que a lista
+  já está filtrada por ele.
+- Sem perfil escrito, devolva uma lista vazia.`;
 
 const TARGETING_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["cnaePrefixes", "rationale", "channels", "excludeMei", "naturezaPrefixes", "probes", "ftsTerms"],
+  required: [
+    "cnaePrefixes", "rationale", "channels", "excludeMei", "naturezaPrefixes",
+    "probes", "ftsTerms", "icpCoverage",
+  ],
   properties: {
     cnaePrefixes: { type: "array", items: { type: "string" } },
     rationale: { type: "string" },
@@ -83,6 +99,23 @@ const TARGETING_SCHEMA = {
       },
     },
     ftsTerms: { type: "array", items: { type: "string" } },
+    // What the written ideal-customer profile turned into, criterion by
+    // criterion. The `false` rows are the valuable ones: the base has no
+    // headcount, revenue or tooling, so a profile that mentions them produces
+    // filters that silently do not exist.
+    icpCoverage: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["criterion", "mapped", "mappedTo"],
+        properties: {
+          criterion: { type: "string" },
+          mapped: { type: "boolean" },
+          mappedTo: { type: "string" },
+        },
+      },
+    },
   },
 } as const;
 
@@ -180,6 +213,14 @@ export interface CompileResult {
   spec: OfferSpec;
   model: string;
   rationale: string;
+  /** What the written ideal-customer profile became, criterion by criterion. */
+  icpCoverage: IcpCriterion[];
+}
+
+export interface CompileInput {
+  description: string;
+  /** The operator's own words for who they want. Optional. */
+  idealCustomer?: string;
 }
 
 /**
@@ -212,9 +253,10 @@ export interface CompileOptions {
 
 export async function compileOffer(
   deps: Deps,
-  description: string,
+  input: CompileInput,
   opts: CompileOptions = {}
 ): Promise<CompileResult> {
+  const { description, idealCustomer } = input;
   if (!deps.llm) {
     throw new Error(
       "OPEN_ROUTER_API_KEY is not set — compiling an offer needs a model. " +
@@ -230,6 +272,15 @@ export async function compileOffer(
   const budget = createLlmBudget(deps.db, { dailyRequests: opts.llmDailyRequests });
   await budget.checkBudget(model, 2);
 
+  // The operator's profile is a requirement, not a hint. Saying so matters:
+  // without it the model treats the two blocks as one description and quietly
+  // widens the target back out to whatever the product implies.
+  const userPrompt = idealCustomer?.trim()
+    ? `Produto:\n${description}\n\n` +
+      `Perfil do cliente ideal (escrito pelo operador — trate como requisito, ` +
+      `não como sugestão):\n${idealCustomer.trim()}`
+    : `Produto:\n${description}`;
+
   deps.progress.stage("compile", "Compilando descrição em perfil de cliente", 2);
   const { value: t } = await llm.completeJson<Record<string, any>>({
     task: "compile",
@@ -238,7 +289,7 @@ export async function compileOffer(
     maxTokens: 2000,
     messages: [
       { role: "system", content: TARGETING_SYSTEM },
-      { role: "user", content: `Produto:\n${description}` },
+      { role: "user", content: userPrompt },
     ],
   });
 
@@ -319,7 +370,36 @@ export async function compileOffer(
     presets: [],
   });
 
-  return { spec, model, rationale: String(t.rationale ?? "") };
+  return {
+    spec,
+    model,
+    rationale: String(t.rationale ?? ""),
+    icpCoverage: parseIcpCoverage(t.icpCoverage),
+  };
+}
+
+/**
+ * Model output, made safe to render.
+ *
+ * Bounded and coerced rather than trusted: this is free-model output that goes
+ * straight onto a page, and a missing field must not blank the panel that
+ * exists to tell the operator what was NOT filtered.
+ */
+function parseIcpCoverage(raw: unknown): IcpCriterion[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .slice(0, 20)
+    .map((r) => {
+      const o = (r ?? {}) as Record<string, unknown>;
+      const criterion = String(o.criterion ?? "").trim().slice(0, 200);
+      if (!criterion) return null;
+      return {
+        criterion,
+        mapped: Boolean(o.mapped),
+        mappedTo: String(o.mappedTo ?? "").trim().slice(0, 200),
+      };
+    })
+    .filter((r): r is IcpCriterion => r !== null);
 }
 
 // ------------------------------------------------------- CNAE verification

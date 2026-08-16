@@ -2,14 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { compileOfferAction } from "../actions";
+import { startCampaignAction } from "../actions";
 
 /**
- * The entry point for the whole tool: describe a product in plain Portuguese
- * and get back a targeting spec plus a ranked list of companies.
+ * The entry point for the whole tool: describe a product and who should buy it,
+ * and get back a ranked list of companies.
  *
- * Compiling runs as a background job — two calls to a throttled free model can
- * take a minute — so this only submits and then hands over to the job panel.
+ * Everything after submit runs as one background job — compiling is two calls
+ * to a throttled free model, and the ranking scan walks millions of rows — so
+ * this only submits and hands over to the awaiting page, which follows the same
+ * `pipeline_runs` checklist the cockpit uses.
  */
 export default function NewOfferForm() {
   const [pending, startTransition] = useTransition();
@@ -20,7 +22,7 @@ export default function NewOfferForm() {
   function onSubmit(formData: FormData) {
     setError(null);
     startTransition(async () => {
-      const result = await compileOfferAction(formData);
+      const result = await startCampaignAction(formData);
       if (!result.ok) {
         setError(result.reason);
         return;
@@ -51,6 +53,32 @@ export default function NewOfferForm() {
             "alunos, a partir do conteúdo que a escola já usa. Vendido para escolas de ensino " +
             "fundamental e médio e cursos preparatórios. Ainda não construí — quero validar o " +
             "interesse antes."
+          }
+          style={{ resize: "vertical", lineHeight: 1.45, padding: 8 }}
+        />
+      </label>
+
+      <label style={{ display: "grid", gap: 4 }}>
+        <span style={{ fontSize: 12, fontWeight: 600 }}>
+          Perfil do cliente ideal{" "}
+          <span className="muted" style={{ fontWeight: 400 }}>
+            (opcional, mas é o que mais aperta a mira)
+          </span>
+        </span>
+        <span className="muted" style={{ fontSize: 11.5 }}>
+          Quem você quer atingir: segmento, porte, região, natureza jurídica, e o que o site
+          da empresa mostraria. <strong>Faturamento, número de funcionários e ferramentas
+          usadas não existem</strong> nos dados abertos — se você citar, a próxima tela vai
+          dizer que aquele critério não virou filtro, em vez de fingir que virou.
+        </span>
+        <textarea
+          className="inp"
+          name="icp"
+          rows={4}
+          maxLength={2000}
+          placeholder={
+            "Ex.: escolas particulares de ensino médio, não-MEI, que já tenham portal do " +
+            "aluno no site. De preferência fora das capitais."
           }
           style={{ resize: "vertical", lineHeight: 1.45, padding: 8 }}
         />
@@ -97,11 +125,12 @@ export default function NewOfferForm() {
       )}
 
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <button className="btn" type="submit" disabled={pending}>
-          {pending ? "compilando…" : "Compilar oferta"}
+        <button className="btn btn-primary" type="submit" disabled={pending}>
+          {pending ? "começando…" : "Compilar e ranquear"}
         </button>
         <span className="muted" style={{ fontSize: 11.5 }}>
-          2 chamadas ao modelo. Depois disso, contar e ranquear empresas não custa nada.
+          2 chamadas ao modelo, e o resto é SQL. Enriquecer sites e pontuar com LLM ficam
+          para depois, com o custo escrito no botão.
         </span>
       </div>
     </form>

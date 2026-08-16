@@ -60,14 +60,22 @@ desse tipo. Termos literais, sem regex, sem curinga.
 
 icpCoverage — quando vier um PERFIL DE CLIENTE IDEAL escrito pelo operador:
 - Quebre o perfil em critérios distintos, um item por critério, nas palavras dele.
-- Para cada um, diga se deu para expressá-lo com os campos acima.
+- ATENÇÃO: o TEXTO DA HOME conta como observável. Um critério do tipo "já vende
+  online", "tem delivery", "usa PDV", "tem portal do aluno" NÃO é impossível —
+  vira PROBE com as palavras que apareceriam no site. Só marque mapped=false
+  quando o dado não existir em lugar nenhum: faturamento, número de
+  funcionários, número de alunos, contratos, tráfego, bairro.
 - mapped=true: em mappedTo escreva ONDE ele entrou, concreto —
   "CNAE 8520", "excludeMei", "naturezaPrefixes 2,3", "probe: portal do aluno".
+  Se disser "probe: X", o probe X TEM de estar na lista de probes.
 - mapped=false: em mappedTo escreva POR QUE não deu, citando o dado que falta —
   "a base não traz quadro de pessoal", "não existe faturamento nos dados abertos".
 - NUNCA finja que mapeou. Um critério declarado como filtro que não virou filtro é
   pior do que um critério assumidamente ignorado: o operador vai supor que a lista
   já está filtrada por ele.
+- icpCoverage NÃO é probe. Nunca repita esses critérios dentro de "probes":
+  termos de probe são palavras curtas que aparecem no site, nunca a frase do
+  operador.
 - Sem perfil escrito, devolva uma lista vazia.`;
 
 const TARGETING_SCHEMA = {
@@ -129,6 +137,16 @@ axes: 1 a 3 eixos, nota de 1 a 5. Menos é melhor: 2 costuma bastar.
   (cadastro + sinais do site + texto da home). Se a âncora depender de algo
   que não dá para observar (faturamento, nº de alunos), o eixo não presta.
 - key: minúsculas, sem acento, formato snake_case, ex: "dor_exames".
+
+Quando vier um PERFIL DE CLIENTE IDEAL, ele manda nos eixos.
+- O alvo (CNAE, canal, MEI) já filtrou QUEM aparece; os eixos servem para
+  ordenar quem sobrou. Um eixo que só repete o filtro dá a mesma nota para todo
+  mundo e não serve para nada.
+- Pegue do perfil o que VARIA dentro do alvo e é observável no site ou no
+  cadastro, e transforme isso em eixo.
+- Se o prompt listar critérios como não-observáveis, NÃO crie eixo para eles e
+  não os disfarce dentro da âncora de outro eixo. Preferir um eixo a menos a um
+  eixo que o modelo teria de adivinhar.
 
 stage: "presell" se a descrição indicar que o produto ainda NÃO existe.
 Se stage = presell, a mensagem NÃO pode oferecer teste, preço, plano ou
@@ -293,6 +311,7 @@ export async function compileOffer(
     ],
   });
 
+  const icpCoverage = parseIcpCoverage(t.icpCoverage);
   deps.progress.tick(1, "alvo definido");
   const { value: r } = await llm.completeJson<Record<string, any>>({
     task: "compile",
@@ -303,10 +322,7 @@ export async function compileOffer(
       { role: "system", content: RUBRIC_SYSTEM },
       {
         role: "user",
-        content:
-          `Produto:\n${description}\n\n` +
-          `Alvo já definido: CNAE ${(t.cnaePrefixes ?? []).join(", ")}, ` +
-          `canais ${(t.channels ?? []).join("/")}.`,
+        content: rubricPrompt(description, idealCustomer, t, icpCoverage),
       },
     ],
   });
@@ -335,7 +351,10 @@ export async function compileOffer(
     probes: (t.probes ?? []).slice(0, 12).map((p: Record<string, unknown>, i: number) => ({
       key: slugKey(p.key, `probe_${i + 1}`),
       label: clamp(p.label, 80) || `sinal ${i + 1}`,
-      terms: (Array.isArray(p.terms) ? p.terms : []).slice(0, 20).map((x) => clamp(x, 40)).filter(Boolean),
+      terms: (Array.isArray(p.terms) ? p.terms : [])
+        .slice(0, 20)
+        .map((x) => clamp(x, 40))
+        .filter(isKeyword),
       meaning: p.meaning === "negative" ? "negative" : "positive",
       weight: 1,
     })).filter((p: { terms: string[] }) => p.terms.length > 0),
@@ -374,8 +393,68 @@ export async function compileOffer(
     spec,
     model,
     rationale: String(t.rationale ?? ""),
-    icpCoverage: parseIcpCoverage(t.icpCoverage),
+    icpCoverage,
   };
+}
+
+/**
+ * A probe term is a phrase a website actually contains, not a sentence about
+ * the customer.
+ *
+ * Observed in practice: with `icpCoverage` sitting next to `probes` in the same
+ * schema, the model conflated the two and emitted a probe whose terms were the
+ * profile's criteria restated ("padarias que já vendem online ou têm delivery
+ * próprio"). Nothing matches that, and it is not inert — probe hits move
+ * rank_score and are shown to the scorer as evidence, so a junk probe is a junk
+ * signal in two places. Five words is generous for a keyword and far short of a
+ * criterion.
+ */
+function isKeyword(term: string): boolean {
+  if (!term) return false;
+  return term.trim().split(/\s+/).length <= 5;
+}
+
+/**
+ * What the rubric call is told.
+ *
+ * The profile goes in because the axes are what the scorer actually grades on —
+ * a rubric written blind to the stated ideal customer produces scores that
+ * ignore it, which is exactly the gap this closes.
+ *
+ * The unmappable criteria go in too, as a prohibition rather than a hint. The
+ * base has no headcount and no revenue, so an axis anchored on them cannot be
+ * judged from anything and would come back as invented confidence. Naming them
+ * beats hoping the general "only observable facts" rule catches each one.
+ */
+function rubricPrompt(
+  description: string,
+  idealCustomer: string | undefined,
+  t: Record<string, any>,
+  coverage: IcpCriterion[]
+): string {
+  const parts = [`Produto:\n${description}`];
+
+  if (idealCustomer?.trim()) {
+    parts.push(
+      `Perfil do cliente ideal (escrito pelo operador):\n${idealCustomer.trim()}\n` +
+        `Os eixos devem refletir esse perfil onde ele for observável.`
+    );
+  }
+
+  const unobservable = coverage.filter((c) => !c.mapped);
+  if (unobservable.length) {
+    parts.push(
+      `NÃO crie eixo para estes critérios — não há como observá-los nos dados:\n` +
+        unobservable.map((c) => `- ${c.criterion} (${c.mappedTo})`).join("\n")
+    );
+  }
+
+  parts.push(
+    `Alvo já definido: CNAE ${(t.cnaePrefixes ?? []).join(", ")}, ` +
+      `canais ${(t.channels ?? []).join("/")}.`
+  );
+
+  return parts.join("\n\n");
 }
 
 /**

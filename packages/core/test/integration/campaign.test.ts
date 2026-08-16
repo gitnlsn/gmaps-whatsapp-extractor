@@ -122,10 +122,23 @@ describe("campaign from an idea", () => {
     assert.ok(rows.length > 0, "the run should end with a ranked list, not just a spec");
   });
 
-  it("hands the written profile to the model as a requirement", async () => {
+  it("hands the written profile to the targeting call as a requirement", async () => {
     assert.match(prompts[0], /Perfil do cliente ideal/);
     assert.match(prompts[0], /mais de 50 funcion/);
     assert.match(prompts[0], /requisito/, "the profile must not read as a mere suggestion");
+  });
+
+  it("hands the profile to the rubric call too, minus what cannot be observed", async () => {
+    // The axes are what the scorer actually grades on. A rubric written blind
+    // to the stated profile produces scores that ignore it.
+    assert.match(prompts[1], /Perfil do cliente ideal/);
+    assert.match(prompts[1], /não-MEI/);
+    assert.match(
+      prompts[1],
+      /NÃO crie eixo para estes critérios/,
+      "unobservable criteria must be named as forbidden, not left to a general rule"
+    );
+    assert.match(prompts[1], /mais de 50 funcion.*quadro de pessoal/s);
   });
 
   it("records which criteria could not become filters", async () => {

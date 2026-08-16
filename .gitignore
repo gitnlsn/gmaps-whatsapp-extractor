@@ -1,2 +1,19 @@
 node_modules
 .env
+.env.local
+.env.backup-*
+
+# Receita dumps and exports contain personal phone numbers — never commit them.
+data/
+*.csv
+pgdata/
+
+# Next.js
+web/.next/
+web/node_modules/
+web/next-env.d.ts
+
+dist/
+*.log
+
+.DS_Store

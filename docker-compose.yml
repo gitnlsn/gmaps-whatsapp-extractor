@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: leads-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: leads
+      POSTGRES_PASSWORD: leads
+      POSTGRES_DB: leads
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Receita dumps land here so Postgres can COPY them server-side.
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leads -d leads"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      # The Receita load is a bulk COPY of tens of millions of rows; the
+      # defaults are tuned for a shared server, not a local batch loader.
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=512MB
+      - -c
+      - max_wal_size=4GB
+
+volumes:
+  pgdata:

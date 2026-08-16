@@ -1,26 +1,42 @@
 {
   "name": "gmaps-whatsapp-extractor",
-  "version": "1.0.0",
-  "description": "",
+  "version": "2.0.0",
+  "description": "Lead pipeline for Brazilian local businesses: Receita Federal bulk data + IBGE + website enrichment + LLM scoring",
   "license": "ISC",
   "author": "",
   "type": "commonjs",
-  "main": "index.js",
   "scripts": {
     "start": "tsx src/cli.ts",
-    "gmaps": "tsx src/cli.ts gmaps",
-    "cnpj": "tsx src/cli.ts cnpj",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
+    "db:migrate": "tsx src/cli.ts migrate",
+    "db:psql": "docker compose exec db psql -U leads -d leads",
+    "ibge": "tsx src/cli.ts ibge",
+    "cnaes": "tsx src/cli.ts cnaes",
+    "load": "tsx src/cli.ts load",
+    "plan": "tsx src/cli.ts plan",
+    "enrich": "tsx src/cli.ts enrich",
+    "score": "tsx src/cli.ts score",
+    "queue": "tsx src/cli.ts queue",
+    "export": "tsx src/cli.ts export",
+    "typecheck": "tsc --noEmit",
+    "web": "npm --prefix web run dev",
+    "places": "tsx src/cli.ts places",
+    "stats": "tsx src/cli.ts stats"
   },
   "devDependencies": {
     "@types/node": "^25.3.5",
+    "@types/pg": "^8.15.6",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@types/pg-copy-streams": "^1.2.5",
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
     "libphonenumber-js": "^1.12.38",
-    "puppeteer": "^24.38.0"
+    "pg": "^8.16.3",
+    "pg-copy-streams": "^7.0.0"
   }
 }

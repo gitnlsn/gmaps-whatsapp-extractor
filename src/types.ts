@@ -1,63 +1,30 @@
-export interface PlaceTextSearchResult {
-  name: string;           // resource name e.g. "places/ChIJ..."
-  displayName: { text: string };
-  formattedAddress: string;
-  websiteUri?: string;
-  rating?: number;
-  userRatingCount?: number;
-  primaryType?: string;
-}
-
-export interface TextSearchResponse {
-  places?: PlaceTextSearchResult[];
-  nextPageToken?: string;
-}
-
-export interface PlaceDetails {
-  displayName: { text: string };
-  formattedAddress: string;
-  internationalPhoneNumber?: string;
-  websiteUri?: string;
-  rating?: number;
-  userRatingCount?: number;
-  primaryType?: string;
-  editorialSummary?: { text: string };
-  regularOpeningHours?: { openNow?: boolean };
-  googleMapsUri?: string;
-}
-
-export interface LeadScore {
-  score: number;
-  reason: string;
-}
-
-export interface CnpjCompany {
-  status: string;
-  companyName: string;
+export interface Lead {
   cnpj: string;
-  location: string;
-  detailUrl: string;
-  razaoSocial?: string;
-  capitalSocial?: string;
-  cnaePrincipal?: string;
-  dataAbertura?: string;
-  nomeFantasia?: string;
-  naturezaJuridica?: string;
-  endereco?: string;
-  cnaesSecundarios?: string;
-  cnpjFull?: string;
+  razaoSocial: string | null;
+  nomeFantasia: string | null;
+  cnaePrincipal: string | null;
+  porte: string | null;
+  capitalSocial: string | null;
+  opcaoMei: boolean | null;
+  dataInicioAtividade: string | null;
+  situacao: string;
+  uf: string | null;
+  municipioId: number | null;
+  municipioNome: string | null;
+  phoneE164: string | null;
+  isMobile: boolean | null;
+  email: string | null;
+  googlePlaceId: string | null;
+  source: string;
+  collectedAt: string;
 }
 
-export interface ExtractedContact {
-  name: string;
-  phone: string;
-  waMeLink: string;
-  address: string;
-  websiteUri?: string;
-  rating?: number;
-  userRatingCount?: number;
-  primaryType?: string;
-  googleMapsUri?: string;
-  leadScore?: number;
-  leadScoreReason?: string;
-}
+export type Tier = "hot" | "warm" | "cold";
+export type Offer = "site" | "chatbot" | "both" | "none";
+export type Confidence = "high" | "medium" | "low" | "cannot_determine";
+export type OutreachStatus =
+  | "queued"
+  | "sent"
+  | "replied"
+  | "not_a_fit"
+  | "opted_out";

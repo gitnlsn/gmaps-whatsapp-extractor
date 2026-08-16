@@ -1,0 +1,29 @@
+{
+  "name": "@leads/core",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Domain core: use-cases, ports and adapters for the lead pipeline. Both apps consume this.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./domain": "./src/domain/index.ts",
+    "./ports": "./src/ports/index.ts",
+    "./db": "./src/db/pg.ts",
+    "./usecases/*": "./src/usecases/*.ts",
+    "./adapters/*": "./src/adapters/*.ts",
+    "./services/*": "./src/services/*.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test --test-reporter=spec \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "libphonenumber-js": "^1.12.38",
+    "pg": "^8.16.3",
+    "pg-copy-streams": "^7.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.6",
+    "@types/pg-copy-streams": "^1.2.5"
+  }
+}

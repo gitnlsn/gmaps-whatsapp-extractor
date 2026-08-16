@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2023"],
+    // The core ships TypeScript source, consumed by tsx (CLI) and by Next's
+    // bundler (web). Neither uses real Node ESM resolution, so extensionless
+    // relative imports — the style the whole codebase already uses — stay valid.
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "sourceMap": true
+  }
+}

@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+  - "apps/*"
+# esbuild backs tsx (the CLI runner); sharp backs Next's image optimiser.
+# Both need their postinstall to fetch a platform binary.
+allowBuilds:
+  esbuild: true
+  sharp: true

@@ -1,0 +1,17 @@
+{
+  "name": "@leads/cli",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Terminal front end. Wires the core's ports to real adapters and a console reporter.",
+  "bin": { "leads": "./src/cli.ts" },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@leads/core": "workspace:*",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1"
+  }
+}

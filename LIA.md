@@ -20,7 +20,7 @@ declarada, então uma ferramenta que hoje procura clientes para um produto e ama
 outro não tem *uma* finalidade — tem uma por campanha.
 
 Cada oferta declara a sua no campo `offer_specs.finalidade`, obrigatório no schema e
-obrigatório no formulário que cria a oferta. `npm start -- offer show <id>` imprime a
+obrigatório no formulário que cria a oferta. `pnpm leads offer show <id>` imprime a
 finalidade junto da rubrica, e cada pontuação grava `(offer_id, offer_version,
 prompt_sha)` — dá para reconstruir exatamente sob qual finalidade e sob qual critério um
 lead foi avaliado.
@@ -110,7 +110,7 @@ por isso o contato é **sempre relacionado à atividade da empresa** e nunca pes
 ## 5. Salvaguardas técnicas (implementadas no código)
 
 - `suppression` — chave é o telefone; consultada em toda seleção de fila, e o telefone
-  suprimido é excluído logo no Estágio 0 de qualquer oferta (`src/offers/rank.ts`), antes
+  suprimido é excluído logo no Estágio 0 de qualquer oferta (`packages/core/src/domain/rank.ts`), antes
   de qualquer gasto.
 - **A supressão deixou de ser irreversível, e isso é uma mudança consciente.** Um opt-out
   clicado na linha errada matava um lead bom para sempre, então o painel passou a permitir

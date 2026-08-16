@@ -16,56 +16,62 @@ cara e, pelos termos do Google, os dados dela não podem ser armazenados (veja
 ## Começando
 
 ```bash
-npm install
+pnpm install                  # workspace: packages/core + apps/cli + apps/web
 cp .env.example .env          # preencha OPEN_ROUTER_API_KEY e SENDER_NAME
-npm run db:up                 # sobe o Postgres no Docker
-npm run db:migrate            # cria o schema
-npm run ibge                  # 5.571 municípios + população
+pnpm db:up                    # sobe o Postgres no Docker
+pnpm db:migrate               # cria o schema
+pnpm ibge                     # 5.571 municípios + população
 ```
 
 Carregue os dados da Receita. O filtro por CNAE é o que mantém o banco pequeno:
 
 ```bash
 # veja o tamanho do download antes de baixar
-npm run load -- --dry-run
+pnpm load --dry-run
 
 # restaurantes, salões, dentistas, oficinas, academias, mercados — 1/10 da base
-npm run load -- --cnae 5611,9602,8630,4520,9313,4712 --parts 0
+pnpm load --cnae 5611,9602,8630,4520,9313,4712 --parts 0
 ```
 
 Depois, o ciclo normal:
 
 ```bash
-npm run enrich -- --limit 500     # visita o site de cada lead (grátis)
-npm run score  -- --limit 200     # pontua com rubrica ancorada
-npm run web                       # dashboard em http://localhost:3100
+pnpm enrich --limit 500     # visita o site de cada lead (grátis)
+pnpm score  --limit 200     # pontua com rubrica ancorada
+pnpm web                    # dashboard em http://localhost:3100
 ```
 
 ## Comandos
 
 | Comando | O que faz |
 |---|---|
-| `npm run db:up` / `db:down` / `db:reset` | Postgres local via Docker Compose |
-| `npm run db:migrate` | aplica as migrations |
-| `npm run db:psql` | abre o psql no banco |
-| `npm run ibge` | carrega municípios e população do IBGE |
-| `npm run cnaes` | carrega a tabela oficial de CNAEs (~1.359 códigos, 22 KB) |
-| `npm run load` | baixa e carrega os dados abertos da Receita |
-| `npm run enrich` | busca e analisa o site de cada lead |
-| `npm run score` | pontua os leads com LLM |
-| `npm run queue` | fila de revisão no terminal |
-| `npm run export -- leads.csv` | exporta para CSV |
-| `npm start -- stats` | estado do pipeline e gasto com API do Google |
-| `npm start -- models` | lista os modelos gratuitos do OpenRouter agora |
-| `npm run web` | dashboard Next.js |
+| `pnpm db:up` / `db:down` / `db:reset` | Postgres local via Docker Compose |
+| `pnpm db:migrate` | aplica as migrations |
+| `pnpm db:psql` | abre o psql no banco |
+| `pnpm ibge` | carrega municípios e população do IBGE |
+| `pnpm cnaes` | carrega a tabela oficial de CNAEs (~1.359 códigos, 22 KB) |
+| `pnpm load` | baixa e carrega os dados abertos da Receita |
+| `pnpm enrich` | busca e analisa o site de cada lead |
+| `pnpm score` | pontua os leads com LLM |
+| `pnpm queue` | fila de revisão no terminal |
+| `pnpm leads export leads.csv` | exporta para CSV |
+| `pnpm leads stats` | estado do pipeline e gasto com API do Google |
+| `pnpm leads models` | lista os modelos gratuitos do OpenRouter agora |
+| `pnpm web` | dashboard Next.js |
+| `pnpm test` | testes de integração contra o Postgres do compose |
+| `pnpm typecheck` | tsc em core, cli e web |
+
+`pnpm leads <comando>` chama o CLI direto; os atalhos acima são só conveniência.
+Qualquer comando aceita `--json`, que troca o relatório de progresso por NDJSON —
+é assim que o painel acompanha um job sem raspar o terminal.
 
 ### Flags que importam
 
 ```bash
-npm run load -- --uf SP --cnae 5611 --parts 0,1 --dry-run --keep-files
-npm run enrich -- --limit 1000 --concurrency 20 --psi --recheck
-npm run score -- --limit 500 --batch 10 --rescore
-npm run queue -- --tier hot --limit 40
+pnpm load --uf SP --cnae 5611 --parts 0,1 --dry-run --keep-files
+pnpm enrich --limit 1000 --concurrency 20 --psi --recheck
+pnpm score --limit 500 --batch 10 --rescore
+pnpm queue --tier hot --limit 40
 ```
 
 ---
@@ -139,7 +145,7 @@ nono dígito. A `libphonenumber` corretamente rejeita um celular brasileiro de 8
 como inválido, então, sem tratamento, **todos os celulares viram "fixo"**: a taxa medida
 foi de 2,5%. Reconstruindo o número (8 dígitos começando em 6–9 → prefixa "9"), a taxa
 real é **70,3%**. É a diferença entre 42 mil e 1,17 milhão de leads contatáveis.
-Implementado em [`src/phone.ts`](./src/phone.ts).
+Implementado em [`packages/core/src/domain/phone.ts`](./packages/core/src/domain/phone.ts).
 
 ### Celular é ordenação, não filtro
 
@@ -171,14 +177,14 @@ O sistema é honesto sobre isso: ele **não** afirma "não tem site" quando só 
 um. O gancho gerado pergunta em vez de afirmar.
 
 **A conclusão prática:** a Receita entrega volume e contato de graça; o sinal de qualidade
-vem do `npm run places`, cuja cota grátis (1.000 detalhes/mês) casa quase exatamente com
+vem do `pnpm places`, cuja cota grátis (1.000 detalhes/mês) casa quase exatamente com
 a capacidade de um envio manual de 40/dia (~800/mês).
 
 ### Modelos gratuitos têm limites reais
 
 20 req/min, 50 req/dia (1.000/dia se a conta já comprou ≥ 10 créditos), e às vezes o
 provedor devolve 429 ou JSON malformado. O cliente tenta de novo e, se não conseguir,
-grava `score = NULL` com o erro — **nunca** um 5 inventado. Rode `npm start -- models`
+grava `score = NULL` com o erro — **nunca** um 5 inventado. Rode `pnpm leads models`
 para ver a lista atual.
 
 ## Limites que valem conhecer
@@ -212,7 +218,7 @@ terceiros como a BrasilAPI servem para conferir **um** CNPJ, não para carga.
 
 ## Dashboard
 
-`npm run web` → <http://localhost:3100>
+`pnpm web` → <http://localhost:3100>
 
 Tudo é tabela — filtros, ordenação e paginação vivem na URL, então qualquer visão é
 linkável e o servidor faz o trabalho (importa quando a tabela tem milhões de linhas).
@@ -246,7 +252,7 @@ decorrido e um botão de cancelar. Quando termina, as tabelas se atualizam sozin
   `queue` também não, porque é interativo e travaria.
 - **`--allow-paid` não é exposto.** É a única flag que gasta dinheiro de verdade.
 - O botão do Google mostra a cota grátis restante e se desabilita no zero. Quem realmente
-  impede o gasto continua sendo `src/budget.ts`.
+  impede o gasto continua sendo `packages/core/src/services/budget.ts`.
 - `histórico ▾` lista os últimos 10 runs com status e duração.
 
 ⚠️ **Não exponha essa porta na rede.** O dashboard não tem autenticação e inicia processos
@@ -256,22 +262,57 @@ no seu computador. Ele foi feito para `localhost`.
 
 ## Estrutura
 
+Workspace pnpm com um núcleo de domínio e duas interfaces sobre ele. Isso não é
+organização por gosto: o painel precisava da mesma lógica do CLI e a única
+interface reutilizável que existia era a *linha de comando* — daí o painel
+disparar `tsx src/cli.ts` como subprocesso e o CSV existir em duas cópias.
+
 ```
-migrations/001_init.sql   schema
-src/db.ts                 pool do Postgres
-src/migrate.ts            runner de migrations
-src/ibge.ts               municípios + população
-src/receita.ts            download e carga dos dados abertos
-src/enrich.ts             verificação do site + PageSpeed
-src/llm.ts                cliente OpenRouter (modelos gratuitos por padrão)
-src/score.ts              rubrica e pontuação
-src/draft.ts              redação da mensagem
-src/queue.ts              fila no terminal
-src/budget.ts             trava de gasto da API do Google
-src/phone.ts              classificação de telefone (celular vs fixo)
-src/csv.ts                exportação
-migrations/               schema (004 = tabela de jobs)
-web/lib/jobs.ts           dispara o CLI e captura a saída (allowlist)
-web/components/JobPanel.tsx  a barra de ações (único client component)
-web/                      dashboard Next.js
+packages/core/                  @leads/core — a lógica, uma vez só
+  migrations/                   schema (004 = tabela de jobs)
+  src/ports/                    Db, Progress, Http, Llm, Places, Budget
+  src/db/pg.ts                  pool do Postgres (cacheado em globalThis)
+  src/domain/                   puro, sem I/O — testável sem banco
+    phone.ts                    classificação de telefone (celular vs fixo)
+    rank.ts                     predicados do Estágio 0 e o SQL de ranking
+    spec.ts  probes.ts  prompt.ts  csv.ts  legacy.ts
+  src/usecases/                 um arquivo por passo do pipeline
+    loadReceita.ts  loadMunicipios.ts  migrateSchema.ts
+    compileOffer.ts  offerRepo.ts  shortlist.ts
+    enrichLeads.ts  runPlaces.ts  scoreLeads.ts
+    refreshRollups.ts  exportLeads.ts  draftMessage.ts
+  src/adapters/                 openrouter.ts, googlePlaces.ts
+  src/services/                 budget.ts (Google), llmBudget.ts (OpenRouter)
+  test/integration/             contra o Postgres real do docker-compose
+
+apps/cli/                       @leads/cli — terminal
+  src/cli.ts                    só commander: valida e delega
+  src/deps.ts                   onde process.env é lido, e o único lugar
+  src/progress.ts               dois relatores: console (\r) e NDJSON
+  src/queue.ts                  fila interativa (readline é interface, não domínio)
+
+apps/web/                       @leads/web — dashboard Next.js
+  lib/jobs.ts                   dispara o CLI e captura a saída (allowlist)
+  components/JobPanel.tsx       a barra de ações
 ```
+
+**A regra que sustenta isso:** nenhum use-case lê `process.env`, escreve em
+`console` ou abre socket próprio. Ele declara o que precisa em `Deps` e o app
+entrega. É o que permite um teste rodar o SQL de verdade contra um Postgres de
+verdade com OpenRouter e Google dublados — sem queimar cota e sem mock que
+concorda com qualquer coisa que o código fizer.
+
+O painel continua **disparando o CLI como subprocesso**, de propósito: um `load`
+de 30 minutos dentro do `next dev` morre na próxima gravação de arquivo.
+
+### Testes
+
+```bash
+pnpm db:up && pnpm test
+```
+
+Cada arquivo de teste cria e migra o próprio banco descartável no mesmo Postgres
+do compose. O que eles cobrem é o que não está em TypeScript: os índices únicos
+parciais (uma oferta ativa, um contato por telefone, um job rodando), a exclusão
+de suprimidos no topo do funil, o desempate determinístico do ranking, e o fato
+de que uma falha do modelo grava `score = NULL` com o erro — nunca um 5 falso.

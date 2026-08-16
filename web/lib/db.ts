@@ -9,7 +9,10 @@ function pool(): Pool {
   if (!globalForPg.leadsPool) {
     const connectionString =
       process.env.DATABASE_URL ?? "postgres://leads:leads@localhost:5432/leads";
-    globalForPg.leadsPool = new Pool({ connectionString, max: 5 });
+    // Streaming means a page issues its queries concurrently instead of one at
+    // a time, and the 1.5 s /api/jobs poll already holds three while a job
+    // runs. At max: 5 those contended for the same handful of connections.
+    globalForPg.leadsPool = new Pool({ connectionString, max: 15 });
   }
   return globalForPg.leadsPool;
 }

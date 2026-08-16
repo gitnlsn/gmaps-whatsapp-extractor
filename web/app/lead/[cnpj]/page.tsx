@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getLead } from "@/lib/queries";
-import { setStatus } from "@/app/actions";
+import OutreachButtons from "@/components/OutreachButtons";
 import { TierChip, SiteChip } from "@/components/bits";
 
 export const dynamic = "force-dynamic";
@@ -52,13 +52,6 @@ export default async function LeadPage({ params }: { params: Promise<{ cnpj: str
   const justification = (s.evidence as Rec)?.justification as string | undefined;
   const phone = lead.phone_e164 as string | null;
 
-  async function mark(formData: FormData) {
-    "use server";
-    const status = String(formData.get("status")) as
-      | "sent" | "replied" | "not_a_fit" | "opted_out" | "queued";
-    await setStatus(cnpj, status);
-  }
-
   return (
     <>
       <div style={{ marginBottom: 12 }}>
@@ -96,20 +89,11 @@ export default async function LeadPage({ params }: { params: Promise<{ cnpj: str
             abrir WhatsApp
           </a>
         )}
-        <form action={mark} style={{ display: "flex", gap: 6 }}>
-          <button className="btn" name="status" value="sent">
-            marcar enviado
-          </button>
-          <button className="btn" name="status" value="replied">
-            respondeu
-          </button>
-          <button className="btn" name="status" value="not_a_fit">
-            não serve
-          </button>
-          <button className="btn" name="status" value="opted_out">
-            opt-out
-          </button>
-        </form>
+        <OutreachButtons
+          cnpj={String(lead.cnpj).trim()}
+          status={(o.status as string) ?? "novo"}
+          offerId={(o.offer_id as string) ?? undefined}
+        />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 16 }}>

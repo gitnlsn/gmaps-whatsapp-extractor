@@ -1,32 +1,28 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import JobPanel from "@/components/JobPanel";
-import { getPlacesQuota } from "@/lib/queries";
+import NavTabs from "@/components/NavTabs";
 import "./globals.css";
-
-// The job bar reflects live state, so nothing here may be cached.
-export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Leads",
   description: "Pipeline de leads de negócios locais brasileiros",
 };
 
-const NAV = [
-  { href: "/", label: "Leads" },
-  { href: "/discover", label: "Descobrir" },
-  { href: "/offers", label: "Ofertas" },
-  { href: "/queue", label: "Fila" },
-  { href: "/coverage", label: "Cobertura" },
-  { href: "/outreach", label: "Contatos" },
-  { href: "/demand", label: "Demanda" },
-];
-
-export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  // Server-rendered so the remaining-quota label is correct on first paint
-  // instead of appearing after the first client poll.
-  const quota = await getPlacesQuota();
-
+/**
+ * The shell is synchronous on purpose.
+ *
+ * It used to `await getPlacesQuota()` before emitting any HTML, which put a
+ * database round trip in front of the header, the nav and every page below it —
+ * on every navigation. It bought only one thing: the "N restantes" label next
+ * to the Places step being correct on first paint rather than a moment later.
+ * JobPanel already fetches /api/jobs (quota included) when it mounts, so that
+ * label now fills itself in and nothing waits on the shell.
+ *
+ * Note there is no `dynamic = "force-dynamic"` here any more either. The layout
+ * reads nothing; the pages below it declare their own dynamism. Keeping it here
+ * only forced the shell to be re-rendered per request for no benefit.
+ */
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR">
       <body>
@@ -42,15 +38,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           }}
         >
           <strong style={{ fontSize: 13, letterSpacing: "-0.01em" }}>leads</strong>
-          <nav style={{ display: "flex", gap: 14 }}>
-            {NAV.map((n) => (
-              <Link key={n.href} href={n.href} className="link" style={{ fontSize: 12.5 }}>
-                {n.label}
-              </Link>
-            ))}
-          </nav>
+          <NavTabs />
         </header>
-        <JobPanel initialQuotaLeft={quota.detailsLeft} />
+        <JobPanel />
         <main style={{ padding: 16 }}>{children}</main>
       </body>
     </html>

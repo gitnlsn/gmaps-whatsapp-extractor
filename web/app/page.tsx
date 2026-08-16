@@ -1,9 +1,20 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { getLeads, getStats, getUfs, type Filters } from "@/lib/queries";
-import { activeOfferId, getOffer } from "@/lib/offers";
+import { getActiveOffer, getOffer, type OfferAxis } from "@/lib/offers";
 import FilterBar from "@/components/FilterBar";
 import StatStrip from "@/components/StatStrip";
-import { TierChip, SiteChip, Evidence, Fit, SortHeader, Pager } from "@/components/bits";
+import {
+  TierChip,
+  SiteChip,
+  Evidence,
+  Fit,
+  SortHeader,
+  Pager,
+  StatSkeleton,
+  TableSkeleton,
+  FilterBarSkeleton,
+} from "@/components/bits";
 
 export const dynamic = "force-dynamic";
 
@@ -14,23 +25,65 @@ function one(v: string | string[] | undefined): string | undefined {
   return s && s.length > 0 ? s : undefined;
 }
 
+const PARAM_KEYS = [
+  "q", "uf", "municipio", "cnae", "tier", "offer", "site", "status", "canal",
+  "minFit", "mei", "maxIdade", "sort", "dir", "page",
+] as const;
+
+type Params = Record<string, string | undefined>;
+
+/**
+ * The page itself awaits nothing but searchParams.
+ *
+ * Previously it awaited the active offer, then the offer, then a Promise.all of
+ * three queries — so the browser got no HTML at all until the slowest of them
+ * finished. Each section now fetches its own data behind its own Suspense
+ * boundary: the shell and the table chrome paint immediately and each part
+ * fills in as its query returns, slowest last instead of first.
+ */
 export default async function LeadsPage({ searchParams }: { searchParams: SP }) {
   const sp = await searchParams;
 
-  const params: Record<string, string | undefined> = {};
-  for (const k of [
-    "q", "uf", "municipio", "cnae", "tier", "offer", "site", "status", "canal",
-    "minFit", "mei", "maxIdade", "sort", "dir", "page",
-  ]) {
-    params[k] = one(sp[k]);
-  }
+  const params: Params = {};
+  for (const k of PARAM_KEYS) params[k] = one(sp[k]);
 
+  // Keying the boundaries on the filter set makes React show the skeleton again
+  // when the filters change. Without a key it would keep the previous rows on
+  // screen during the transition, which reads as "these are your results".
+  const key = PARAM_KEYS.map((k) => params[k] ?? "").join("|");
+
+  return (
+    <>
+      <Suspense fallback={<StatSkeleton />}>
+        <StatsSection />
+      </Suspense>
+
+      <Suspense fallback={<FilterBarSkeleton />}>
+        <FiltersSection params={params} />
+      </Suspense>
+
+      <Suspense key={key} fallback={<TableSkeleton rows={14} cols={15} />}>
+        <LeadsSection params={params} />
+      </Suspense>
+    </>
+  );
+}
+
+async function StatsSection() {
+  return <StatStrip s={await getStats()} />;
+}
+
+async function FiltersSection({ params }: { params: Params }) {
+  return <FilterBar ufs={await getUfs()} params={params} />;
+}
+
+async function LeadsSection({ params }: { params: Params }) {
   // Scores belong to an offer, so the table's fit columns are whatever that
   // offer's rubric declared. No offer, no fit columns — which is honest: an
   // unscored lead has no fit, it does not have a zero.
-  const offerId = params.offer ?? (await activeOfferId());
-  const offer = offerId ? await getOffer(offerId) : undefined;
-  const axes = offer?.axes ?? [];
+  const offer = params.offer ? await getOffer(params.offer) : await getActiveOffer();
+  const offerId = offer?.id;
+  const axes: OfferAxis[] = offer?.axes ?? [];
 
   const filters: Filters = {
     q: params.q,
@@ -52,11 +105,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
     perPage: 50,
   };
 
-  const [{ rows, total }, stats, ufs] = await Promise.all([
-    getLeads(filters),
-    getStats(),
-    getUfs(),
-  ]);
+  const { rows, total, totalCapped } = await getLeads(filters);
 
   const th = (label: string, col: string, className?: string) => (
     <SortHeader
@@ -71,9 +120,6 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
 
   return (
     <>
-      <StatStrip s={stats} />
-      <FilterBar ufs={ufs} params={params} />
-
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
@@ -162,7 +208,13 @@ export default async function LeadsPage({ searchParams }: { searchParams: SP }) 
         </table>
       </div>
 
-      <Pager page={filters.page ?? 1} perPage={50} total={total} params={params} />
+      <Pager
+        page={filters.page ?? 1}
+        perPage={50}
+        total={total}
+        totalCapped={totalCapped}
+        params={params}
+      />
     </>
   );
 }

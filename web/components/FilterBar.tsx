@@ -1,4 +1,8 @@
-import Link from "next/link";
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useTransition } from "react";
+import PendingLink from "./PendingLink";
 
 interface Props {
   ufs: { uf: string; n: number }[];
@@ -35,11 +39,34 @@ const STATUS_OPTS = [
 ];
 
 /**
- * A GET form: every filter lives in the URL, so the whole page stays a Server
- * Component and any view is linkable and shareable.
+ * Every filter lives in the URL, so any view stays linkable and shareable and
+ * the page below stays a Server Component.
+ *
+ * It was a native <form method="GET">, which meant each "filtrar" was a full
+ * document navigation: the browser tore down the page and rebuilt it, with no
+ * way to show that anything was happening. Submitting through the router
+ * instead keeps the same URLs and the same server rendering, but hands back an
+ * `isPending` flag — so the button can say "filtrando…" and the stale table can
+ * dim instead of just sitting there looking current.
  */
 export default function FilterBar({ ufs, params }: Props) {
   const v = (k: string) => params[k] ?? "";
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+
+  function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const data = new FormData(e.currentTarget);
+    const qs = new URLSearchParams();
+    for (const [k, value] of data.entries()) {
+      const s = String(value).trim();
+      // Empty selects mean "any" — keep them out of the URL so a default view
+      // stays a bare "/" and the unfiltered fast path can be detected.
+      if (s) qs.set(k, s);
+    }
+    const query = qs.toString();
+    startTransition(() => router.push(query ? `/?${query}` : "/"));
+  }
 
   // Product-neutral: these describe the DATA (tier, site condition, age,
   // channel), not what is being sold. Anything offer-specific belongs in the
@@ -58,6 +85,7 @@ export default function FilterBar({ ufs, params }: Props) {
     <div className="panel" style={{ padding: 10, marginBottom: 12 }}>
       <form
         method="GET"
+        onSubmit={submit}
         style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}
       >
         <input
@@ -145,12 +173,13 @@ export default function FilterBar({ ufs, params }: Props) {
           ))}
         </select>
 
-        <button className="btn btn-primary" type="submit">
-          filtrar
+        <button className="btn btn-primary" type="submit" disabled={pending}>
+          {pending ? "filtrando…" : "filtrar"}
+          {pending && <span className="spinner" aria-hidden />}
         </button>
-        <Link className="btn" href="/">
+        <PendingLink className="btn" href="/">
           limpar
-        </Link>
+        </PendingLink>
       </form>
 
       <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -158,9 +187,14 @@ export default function FilterBar({ ufs, params }: Props) {
           atalhos:
         </span>
         {presets.map(([href, label]) => (
-          <Link key={href} href={href} className="chip chip-plain" style={{ padding: "2px 8px" }}>
+          <PendingLink
+            key={href}
+            href={href}
+            className="chip chip-plain"
+            style={{ padding: "2px 8px" }}
+          >
             {label}
-          </Link>
+          </PendingLink>
         ))}
       </div>
     </div>

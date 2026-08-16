@@ -164,14 +164,33 @@ export default async function OfferPage({
         </div>
       </details>
 
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 10,
+          marginBottom: 6,
+          flexWrap: "wrap",
+        }}
+      >
         <h2 style={{ fontSize: 14, fontWeight: 650 }}>
           Empresas mais prováveis ({fmt(candidates.total)})
         </h2>
-        <span className="muted" style={{ fontSize: 11.5 }}>
+        <span className="muted" style={{ fontSize: 11.5, flex: 1 }}>
           ordenadas por nota quando pontuadas, senão pelo ranking determinístico
         </span>
+        {candidates.total > 0 && (
+          <a className="btn" href={`/offers/${slug}/export`} download>
+            ↓ baixar CSV
+          </a>
+        )}
       </div>
+      {candidates.total > 0 && (
+        <p className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+          O CSV traz a lista inteira, na mesma ordem, com telefone e link do WhatsApp. Contém
+          dados pessoais — <code>*.csv</code> já está no .gitignore; mantenha assim.
+        </p>
+      )}
 
       <div className="tbl-wrap">
         <table className="tbl">

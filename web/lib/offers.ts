@@ -89,6 +89,20 @@ export async function activeOfferId(): Promise<string | undefined> {
   return r?.id;
 }
 
+/**
+ * The active offer in one round trip.
+ *
+ * Callers that need the offer itself (not just its id) were doing
+ * `activeOfferId()` and then `getOffer(id)` — a waterfall where the second
+ * query cannot even be planned until the first returns. Since the pages that do
+ * this then block on the result before starting their own queries, that round
+ * trip sat in front of everything else on the page.
+ */
+export async function getActiveOffer(): Promise<OfferSummary | undefined> {
+  const r = await sqlOne<Record<string, unknown>>(`${OFFER_SELECT} WHERE o.active`);
+  return r ? shape(r) : undefined;
+}
+
 export async function getOfferSpec(id: string): Promise<{ spec: unknown; description: string; finalidade: string } | undefined> {
   return sqlOne(
     `SELECT s.spec, s.description, s.finalidade
@@ -116,13 +130,21 @@ export interface CnaeCheck {
 
 export async function checkOfferCnaes(prefixes: string[]): Promise<CnaeCheck[]> {
   if (!prefixes.length) return [];
+  // This was the slowest query in the app: 15,200 ms for three prefixes. Each
+  // prefix ran two count(*) over 2.1M rows, and because the pattern is
+  // `p.prefix || '%'` — not a literal — the planner could not use
+  // leads_cnae_prefix_idx and fell back to a seq scan per subquery.
+  //
+  // leads_rollup (migration 009) pre-aggregates by every low-cardinality lead
+  // attribute at once, so the same numbers are a sum over ~21k rows. `ativa`
+  // reproduces this query's situacao='ATIVA' predicate exactly.
   const rows = await sql<Record<string, string | null>>(
     `SELECT p.prefix,
-            (SELECT count(*) FROM leads l
-              WHERE l.cnae_principal LIKE p.prefix || '%' AND l.situacao='ATIVA')::text AS leads,
-            (SELECT count(*) FROM leads l
-              WHERE l.cnae_principal LIKE p.prefix || '%' AND l.situacao='ATIVA'
-                AND l.phone_e164 IS NOT NULL)::text AS reachable,
+            (SELECT COALESCE(sum(r.n), 0) FROM leads_rollup r
+              WHERE r.codigo LIKE p.prefix || '%' AND r.ativa)::text  AS leads,
+            (SELECT COALESCE(sum(r.n), 0) FROM leads_rollup r
+              WHERE r.codigo LIKE p.prefix || '%' AND r.ativa
+                AND r.has_phone)::text                               AS reachable,
             (SELECT count(*) FROM cnaes c WHERE c.codigo LIKE p.prefix || '%')::text AS in_dict,
             (SELECT c.descricao FROM cnaes c
               WHERE c.codigo LIKE p.prefix || '%' ORDER BY c.codigo LIMIT 1) AS descricao

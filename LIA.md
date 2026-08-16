@@ -102,14 +102,24 @@ por isso o contato é **sempre relacionado à atividade da empresa** e nunca pes
 |---|---|
 | Incômodo por contato não solicitado | limite de 40 mensagens/dia; máximo 2 toques por lead; carência de 90 dias |
 | Contato repetido com a mesma pessoa | deduplicação por telefone (E.164), não por CNPJ — um dono com vários CNPJs é contatado uma vez só |
-| Titular não consegue se opor | opt-out oferecido **na primeira mensagem**; tabela `suppression` consultada antes de todo envio, permanente e por telefone |
+| Titular não consegue se opor | opt-out oferecido **na primeira mensagem**; tabela `suppression` consultada antes de todo envio, por telefone. Só sai por ação manual explícita, registrada em `suppression_log` (ver §5) |
 | Retenção indefinida | expurgo de prospects sem interação após 12–24 meses |
 | Mensagem enganosa ou sem identificação | remetente identificado na primeira linha (`SENDER_NAME`, `SENDER_COMPANY`, `SENDER_CNPJ`); o rascunho é proibido de prometer resultado |
 | Vazamento da base | banco local, sem exposição em rede; `data/`, `*.csv` e `pgdata/` no `.gitignore` |
 
 ## 5. Salvaguardas técnicas (implementadas no código)
 
-- `suppression` — chave é o telefone; consultada em toda seleção de fila. Permanente.
+- `suppression` — chave é o telefone; consultada em toda seleção de fila, e o telefone
+  suprimido é excluído logo no Estágio 0 de qualquer oferta (`src/offers/rank.ts`), antes
+  de qualquer gasto.
+- **A supressão deixou de ser irreversível, e isso é uma mudança consciente.** Um opt-out
+  clicado na linha errada matava um lead bom para sempre, então o painel passou a permitir
+  desfazer. Nunca é silencioso: toda inclusão e toda remoção entram em `suppression_log`
+  com motivo e data, a remoção exige uma segunda confirmação explícita na interface, e a
+  tabela é *append-only* — o histórico não pode ser apagado pelo mesmo caminho.
+  Desfazer um opt-out para voltar a contatar quem pediu para não ser contatado
+  **não é uso legítimo desta função**; ela existe para corrigir erro de clique, e o log é o
+  que torna a diferença auditável.
 - `outreach.touches` e `followup_at` — limitam a 2 toques.
 - `DAILY_SEND_CAP` (padrão 40) — limite diário aplicado no CLI e no painel.
 - A ferramenta **não envia mensagens**. Só registra o que a pessoa fez manualmente.
@@ -118,6 +128,20 @@ por isso o contato é **sempre relacionado à atividade da empresa** e nunca pes
   contato" deixou de ser convenção e passou a ser restrição do banco: com várias ofertas
   cadastradas, uma segunda campanha **não consegue** inserir contato para um número que
   já foi abordado. O erro 23505 é a garantia, não a checagem no código.
+
+### Duas salvaguardas que estiveram quebradas (corrigidas em 2026-08-16)
+
+Registrado aqui porque um LIA é registro operacional: uma salvaguarda que não funcionava é
+exatamente o que ele existe para rastrear.
+
+1. **O índice acima não se aplicava a nada marcado pelo painel.** `setStatus` era anterior à
+   migração 006 e nunca gravava `phone_e164`; como o índice é *parcial*
+   (`WHERE phone_e164 IS NOT NULL`), toda linha vinda do navegador passava ao largo dele. O
+   CLI sempre gravou certo. Corrigido, e as linhas antigas foram reparadas na migração 009.
+2. **O limite diário falhava aberto.** `rows.slice(0, remaining || rows.length)` — com
+   `remaining` igual a zero, `0 || rows.length` devolve `rows.length`, então ao bater o teto
+   a fila exibia a lista inteira em vez de nenhuma. O aviso aparecia; o limite não valia.
+   Corrigido; o teto no CLI nunca foi afetado.
 - Oferta em pré-venda (`stage: "presell"`) muda o prompt do rascunho: proíbe presente
   ("temos", "nosso app faz"), proíbe citar cliente, número ou resultado, proíbe oferecer
   teste, plano ou preço, e obriga a dizer que o produto ainda está sendo construído. O
@@ -138,7 +162,7 @@ Canal de atendimento: _(preencher e-mail)_. Prazo de resposta: 15 dias.
 | Confirmação e acesso | consulta por telefone ou CNPJ no banco; resposta com os campos e a origem |
 | Correção | atualização no registro, ou recarga do dado público atualizado |
 | Anonimização / eliminação | `DELETE FROM leads WHERE cnpj = ...` (cascata para as demais tabelas) |
-| Oposição | inclusão em `suppression`, que bloqueia qualquer contato futuro |
+| Oposição | inclusão em `suppression`, que bloqueia qualquer contato futuro. A remoção existe só para corrigir erro de clique e fica registrada em `suppression_log` |
 | Informação sobre compartilhamento | não há compartilhamento com terceiros |
 
 **Atenção:** ao atender um pedido de eliminação, mantenha o telefone em `suppression` — é o
@@ -149,7 +173,7 @@ mínima é, ela própria, uma medida de proteção do titular.
 
 O tratamento é considerado **apoiável em legítimo interesse**, condicionado à manutenção
 integral das salvaguardas do §5 — em especial o opt-out na primeira mensagem, a supressão
-permanente por telefone e o limite de volume.
+por telefone (removível apenas por ação manual registrada) e o limite de volume.
 
 Se qualquer uma dessas salvaguardas for removida (por exemplo, automatizar o envio ou
 elevar o volume), **esta avaliação deixa de valer** e precisa ser refeita.

@@ -125,8 +125,9 @@ export default async function DemandPage({ searchParams }: { searchParams: SP })
             {rows.length === 0 && (
               <tr>
                 <td colSpan={9} className="muted" style={{ padding: 24, textAlign: "center" }}>
-                  Ninguém respondeu ainda. Registre o retorno na fila com{" "}
-                  <code>[i]</code>, ou na ficha do lead.
+                  Ninguém respondeu ainda. Depois de marcar um lead como contatado, use o
+                  seletor <strong>resposta</strong> na <Link className="link" href="/queue">fila</Link>{" "}
+                  ou na ficha do lead para registrar o que a pessoa disse.
                 </td>
               </tr>
             )}

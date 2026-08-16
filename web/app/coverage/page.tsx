@@ -1,9 +1,12 @@
 import { getCoverage } from "@/lib/queries";
+import { activeOfferId } from "@/lib/offers";
 
 export const dynamic = "force-dynamic";
 
 export default async function CoveragePage() {
-  const rows = await getCoverage();
+  // Scored/hot are per-offer, so the counts have to be read under one offer or
+  // a lead graded twice would be counted twice.
+  const rows = await getCoverage(await activeOfferId());
 
   return (
     <>

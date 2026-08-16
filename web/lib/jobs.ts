@@ -119,6 +119,14 @@ const COMMANDS = {
       ...(o.recheck ? ["--recheck"] : []),
     ],
   },
+  // Takes no arguments at all, so it widens nothing: the allowlist maps the
+  // kind to a fixed argv. `load` refreshes the rollups itself; this exists for
+  // the case where they are known stale (a manual SQL load, an interrupted run)
+  // and the dashboard needs correcting without a full reload.
+  "refresh-rollups": {
+    label: "Atualizar totais",
+    build: () => ["refresh-rollups"],
+  },
 } as const;
 
 export type JobKind = keyof typeof COMMANDS;
@@ -133,6 +141,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   places: COMMANDS.places.label,
   "offer-compile": COMMANDS["offer-compile"].label,
   "offer-shortlist": COMMANDS["offer-shortlist"].label,
+  "refresh-rollups": COMMANDS["refresh-rollups"].label,
 };
 
 export interface JobRow {

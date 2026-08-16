@@ -596,6 +596,14 @@ export async function loadReceita(opts: LoadOptions): Promise<void> {
   console.log("\n[5/5] Normalizing into leads");
   await normalize(period);
 
+  // The dashboard rollups are derived from `leads`, and this is the only stage
+  // that writes it — so this is the one place they can go stale. Refreshing
+  // here is what lets the web app read precomputed counts instead of
+  // aggregating 2.1M rows on every page load.
+  console.log("\nRefreshing dashboard rollups");
+  const { refreshRollupsQuietly } = await import("./rollups");
+  await refreshRollupsQuietly();
+
   await reportFillRates();
 }
 

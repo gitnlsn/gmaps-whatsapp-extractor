@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getQueue, sentToday } from "@/lib/queries";
 import { activeOfferId } from "@/lib/offers";
-import { setStatus } from "@/app/actions";
+import OutreachButtons from "@/components/OutreachButtons";
 import { TierChip, SiteChip, Evidence } from "@/components/bits";
 
 export const dynamic = "force-dynamic";
@@ -10,21 +10,11 @@ const DAILY_CAP = Number(process.env.DAILY_SEND_CAP ?? 40);
 
 export default async function QueuePage() {
   // The queue works one offer at a time — the active one. That is what keeps a
-  // second campaign from queueing someone the first already contacted.
+  // second campaign from queueing someone the first already contacted. The
+  // buttons need the id too, so it is resolved before the pair below.
   const offerId = await activeOfferId();
-  const [rows, today] = await Promise.all([
-    getQueue(DAILY_CAP * 2, offerId),
-    sentToday(),
-  ]);
+  const [rows, today] = await Promise.all([getQueue(DAILY_CAP * 2, offerId), sentToday()]);
   const remaining = Math.max(0, DAILY_CAP - today);
-
-  async function mark(formData: FormData) {
-    "use server";
-    const cnpj = String(formData.get("cnpj"));
-    const status = String(formData.get("status")) as
-      | "sent" | "not_a_fit" | "opted_out";
-    await setStatus(cnpj, status);
-  }
 
   return (
     <>
@@ -58,8 +48,7 @@ export default async function QueuePage() {
               <th className="sticky-col">negócio</th>
               <th>local</th>
               <th>site</th>
-              <th className="num">web</th>
-              <th className="num">bot</th>
+              <th className="num">nota</th>
               <th>tier</th>
               <th>gancho</th>
               <th>evidência</th>
@@ -67,7 +56,7 @@ export default async function QueuePage() {
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, remaining || rows.length).map((r) => (
+            {rows.slice(0, remaining).map((r) => (
               <tr key={r.cnpj}>
                 <td className="sticky-col" style={{ maxWidth: 200 }}>
                   <Link className="link" href={`/lead/${r.cnpj}`}>
@@ -105,26 +94,22 @@ export default async function QueuePage() {
                         abrir
                       </a>
                     )}
-                    <form action={mark} style={{ display: "flex", gap: 4 }}>
-                      <input type="hidden" name="cnpj" value={r.cnpj} />
-                      <button className="btn" name="status" value="sent" title="marcar como enviado">
-                        ✓
-                      </button>
-                      <button className="btn" name="status" value="not_a_fit" title="não serve">
-                        ✕
-                      </button>
-                      <button className="btn" name="status" value="opted_out" title="opt-out permanente">
-                        ⊘
-                      </button>
-                    </form>
+                    <OutreachButtons
+                      cnpj={r.cnpj}
+                      status={r.status}
+                      offerId={offerId}
+                      variant="compact"
+                    />
                   </div>
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && (
+            {(rows.length === 0 || remaining === 0) && (
               <tr>
-                <td colSpan={9} className="muted" style={{ padding: 24, textAlign: "center" }}>
-                  Fila vazia. Rode <code>npm run score</code> para pontuar mais leads.
+                <td colSpan={8} className="muted" style={{ padding: 24, textAlign: "center" }}>
+                  {remaining === 0
+                    ? "Limite diário atingido — a fila volta amanhã."
+                    : "Fila vazia. Pontue mais leads para encher a fila."}
                 </td>
               </tr>
             )}

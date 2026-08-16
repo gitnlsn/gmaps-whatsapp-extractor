@@ -37,6 +37,21 @@ program
     })
   );
 
+// ---------------------------------------------------------- refresh-rollups
+
+program
+  .command("refresh-rollups")
+  .description("Recompute the dashboard rollups (cnae_uf_rollup, lead_stats, coverage_rollup)")
+  .action(() =>
+    run(async () => {
+      const { assertDbReachable } = await import("./db");
+      await assertDbReachable();
+      const { refreshRollups } = await import("./rollups");
+      console.log("Refreshing rollups...");
+      await refreshRollups();
+    })
+  );
+
 // --------------------------------------------------------------------- ibge
 
 program

@@ -10,6 +10,8 @@ pgdata/
 
 # Next.js
 web/.next/
+# NEXT_DIST_DIR override, used to build while the dev server is running.
+web/.next-build/
 web/node_modules/
 web/next-env.d.ts
 

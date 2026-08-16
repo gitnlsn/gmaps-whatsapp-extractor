@@ -57,6 +57,7 @@ pnpm web                    # dashboard em http://localhost:3100
 | `pnpm leads export leads.csv` | exporta para CSV |
 | `pnpm leads stats` | estado do pipeline e gasto com API do Google |
 | `pnpm leads models` | lista os modelos gratuitos do OpenRouter agora |
+| `pnpm leads offer run <slug>` | roda a campanha inteira em ordem, e para na revisão |
 | `pnpm web` | dashboard Next.js |
 | `pnpm test` | testes de integração contra o Postgres do compose |
 | `pnpm typecheck` | tsc em core, cli e web |
@@ -228,6 +229,7 @@ linkável e o servidor faz o trabalho (importa quando a tabela tem milhões de l
 | `/` | tabela principal, com barra de filtros e atalhos |
 | `/discover` | quantas empresas existem num segmento e quantas dá para contatar |
 | `/lead/[cnpj]` | ficha completa: cadastro, sinais do site, pontuação, procedência |
+| `/offers/[slug]` | cockpit da campanha: checklist do pipeline, CNAEs, rubrica, ranking |
 | `/queue` | fila do dia, com limite diário e ações inline |
 | `/coverage` | onde há leads e onde o enriquecimento ainda não chegou |
 | `/outreach` | enviados/respostas por semana |
@@ -248,12 +250,50 @@ decorrido e um botão de cancelar. Quando termina, as tabelas se atualizam sozin
 
 - **Um job por vez.** Garantido por um índice único parcial no Postgres, não por
   JavaScript — dois cliques rápidos não conseguem iniciar dois processos.
-- **`load` e `ibge` não estão aqui** de propósito: 2GB+ e ~30 min não cabem numa aba.
-  `queue` também não, porque é interativo e travaria.
+- **`ibge` não está aqui** (setup único) e **`queue` também não**, porque é interativo e
+  travaria. `load` só é alcançável dentro do pipeline, sob um toggle explícito.
 - **`--allow-paid` não é exposto.** É a única flag que gasta dinheiro de verdade.
 - O botão do Google mostra a cota grátis restante e se desabilita no zero. Quem realmente
   impede o gasto continua sendo `packages/core/src/services/budget.ts`.
 - `histórico ▾` lista os últimos 10 runs com status e duração.
+
+### A campanha inteira numa página
+
+`/offers/<slug>` é o cockpit da oferta. A checklist mostra cada estágio com o estado real,
+o número que ele já produziu e **quanto custa**, e o botão **Rodar pipeline** executa todos
+em ordem como um job só:
+
+```
+shortlist → places → enrich → reordenar → score → totais → [ REVISÃO MANUAL ]
+```
+
+Pelo terminal é o mesmo comando:
+
+```bash
+pnpm leads offer run <slug> --dry-run              # imprime o plano e sai
+pnpm leads offer run <slug> --places 25 --enrich 500 --score 200
+```
+
+Três coisas que a ordem resolve e que ninguém acerta na mão:
+
+1. **Places vem antes do enrich.** É ele que descobre o site que o enrich depois julga —
+   sem isso o `score` devolve quase tudo com `confidence: low`.
+2. **O ranking é circular.** `buildRankSql` pontua `hasWebsite`, `ownDomain` e `probeHit`,
+   que vêm do enriquecimento, mas o `enrich --offer` caminha pela shortlist. Reordenar
+   depois do enrich é grátis e ninguém faz.
+3. **Cota esgotada não derruba o run.** Os dois orçamentos param limpos preservando o que
+   já foi feito, então o estágio fica "fez o que deu" e o pipeline segue.
+
+**Ele termina na fila, não no contato.** Nenhum estágio escreve em `outreach` — rodar tudo
+produz uma pilha de leads pontuados para você conferir, nunca uma mensagem. O último cartão
+da página mostra quantos esperam revisão e não tem botão de executar. `--allow-paid`
+continua inalcançável por qualquer caminho.
+
+Um pipeline é **um job**, sequencial num processo só. Encadear N jobs exigiria um
+orquestrador acima da tabela `jobs` — com avanço idempotente e corrida a cada poll — porque
+`jobs_one_running_idx` só permite um job rodando. Um processo sequencial ganha cancelamento
+(SIGTERM para **entre** estágios, e todos são retomáveis), streaming de log e reconciliação
+de crash de graça.
 
 ⚠️ **Não exponha essa porta na rede.** O dashboard não tem autenticação e inicia processos
 no seu computador. Ele foi feito para `localhost`.

@@ -1,4 +1,5 @@
 import { requireLlm, type Deps } from "../ports/index";
+import { createLlmBudget } from "../services/llmBudget";
 import { parseOfferSpec, type OfferSpec } from "../domain/spec";
 
 /**
@@ -204,7 +205,16 @@ function slugKey(v: unknown, fallback: string): string {
   return /^[a-z][a-z0-9_]{2,30}$/.test(s) ? s : fallback;
 }
 
-export async function compileOffer(deps: Deps, description: string): Promise<CompileResult> {
+export interface CompileOptions {
+  /** Daily free-tier request ceiling, resolved by the app. */
+  llmDailyRequests?: number;
+}
+
+export async function compileOffer(
+  deps: Deps,
+  description: string,
+  opts: CompileOptions = {}
+): Promise<CompileResult> {
   if (!deps.llm) {
     throw new Error(
       "OPEN_ROUTER_API_KEY is not set — compiling an offer needs a model. " +
@@ -213,6 +223,12 @@ export async function compileOffer(deps: Deps, description: string): Promise<Com
   }
   const llm = requireLlm(deps);
   const model = llm.modelFor("compile");
+
+  // `scoreLeads` has always refused before its first request rather than dying
+  // halfway; compiling never did, which stopped mattering the moment a button
+  // in a browser could start it and a pipeline could start with it.
+  const budget = createLlmBudget(deps.db, { dailyRequests: opts.llmDailyRequests });
+  await budget.checkBudget(model, 2);
 
   deps.progress.stage("compile", "Compilando descrição em perfil de cliente", 2);
   const { value: t } = await llm.completeJson<Record<string, any>>({

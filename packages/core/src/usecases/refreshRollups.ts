@@ -32,7 +32,7 @@ export async function refreshRollups(deps: Deps): Promise<void> {
       if (!/concurrently/i.test(msg)) throw err;
       await deps.db.query(`REFRESH MATERIALIZED VIEW ${name}`);
     }
-    deps.progress.tick(1, `${name} (${Date.now() - started} ms)`);
+    deps.progress.info(`  refreshed ${name} (${Date.now() - started} ms)`);
   }
 }
 

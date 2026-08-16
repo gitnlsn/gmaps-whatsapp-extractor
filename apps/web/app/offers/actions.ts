@@ -90,6 +90,43 @@ export async function runOfferJob(
   return { ok: true, jobId: result.jobId };
 }
 
+export interface PipelineOptions {
+  places?: number;
+  enrich?: number;
+  score?: number;
+  withLoad?: boolean;
+  reshortlist?: boolean;
+}
+
+/**
+ * Runs the whole campaign for one offer as a single job.
+ *
+ * It ends at the review queue by construction: no stage in the chain writes to
+ * `outreach`, so "run everything" produces a pile of scored leads to look at,
+ * never a message. Sending stays a human action, one lead at a time.
+ */
+export async function runPipelineAction(
+  offerId: string,
+  opts: PipelineOptions = {}
+): Promise<ActionResult> {
+  if (!SLUG_RE.test(offerId)) return { ok: false, reason: "slug inválido" };
+  const exists = await sqlOne<{ id: string }>(`SELECT id FROM offers WHERE id = $1`, [offerId]);
+  if (!exists) return { ok: false, reason: "oferta não encontrada" };
+
+  const result = await startJob("offer-run", {
+    offer: offerId,
+    places: opts.places,
+    enrich: opts.enrich,
+    score: opts.score,
+    withLoad: opts.withLoad,
+    reshortlist: opts.reshortlist,
+  });
+  if (!result.ok) return { ok: false, reason: result.reason ?? "não foi possível iniciar" };
+
+  revalidatePath(`/offers/${offerId}`);
+  return { ok: true, jobId: result.jobId };
+}
+
 /**
  * Activates one offer.
  *

@@ -313,3 +313,78 @@ export async function getDemandFunnel(): Promise<DemandFunnel[]> {
       ORDER BY would_pay DESC, positive DESC`
   );
 }
+
+// ------------------------------------------------------------- pipeline runs
+
+export type StepStatus = "pending" | "running" | "done" | "skipped" | "failed";
+
+export interface PipelineStep {
+  key: string;
+  label: string;
+  status: StepStatus;
+  note?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface PipelineRun {
+  id: number;
+  offer_id: string;
+  job_id: number | null;
+  steps: PipelineStep[];
+  status: "running" | "done" | "failed" | "cancelled";
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+/**
+ * The most recent run for an offer, finished or not.
+ *
+ * The checklist is drawn from two sources on purpose: `pending` and `done` come
+ * from the real counters (a shortlist built last week is done whether or not a
+ * run recorded it), while `running` and `skipped` can only come from a run in
+ * flight. Deriving everything from the run would show a fresh offer as though
+ * nothing had ever been done to it.
+ */
+export async function getCurrentPipelineRun(offerId: string): Promise<PipelineRun | undefined> {
+  return sqlOne<PipelineRun>(
+    `SELECT id, offer_id, job_id, steps, status, error, started_at, finished_at
+       FROM pipeline_runs
+      WHERE offer_id = $1
+      ORDER BY (status = 'running') DESC, started_at DESC
+      LIMIT 1`,
+    [offerId]
+  );
+}
+
+/** The newest run across all offers — what the shared /api/jobs poll returns. */
+export async function getLatestPipelineRun(): Promise<PipelineRun | undefined> {
+  return sqlOne<PipelineRun>(
+    `SELECT id, offer_id, job_id, steps, status, error, started_at, finished_at
+       FROM pipeline_runs
+      ORDER BY (status = 'running') DESC, started_at DESC
+      LIMIT 1`
+  );
+}
+
+export async function getRecentPipelineRuns(offerId: string, limit = 5): Promise<PipelineRun[]> {
+  return sql<PipelineRun>(
+    `SELECT id, offer_id, job_id, steps, status, error, started_at, finished_at
+       FROM pipeline_runs WHERE offer_id = $1 ORDER BY started_at DESC LIMIT $2`,
+    [offerId, limit]
+  );
+}
+
+/** Scored, not cold, not yet contacted — the pile waiting for a human. */
+export async function readyForReview(offerId: string): Promise<number> {
+  const r = await sqlOne<{ n: string }>(
+    `SELECT count(*)::text AS n
+       FROM scores s
+       LEFT JOIN outreach o ON o.cnpj = s.cnpj
+      WHERE s.offer_id = $1 AND s.best_fit IS NOT NULL
+        AND s.tier <> 'cold' AND o.cnpj IS NULL`,
+    [offerId]
+  );
+  return Number(r?.n ?? 0);
+}

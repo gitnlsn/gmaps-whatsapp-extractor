@@ -44,6 +44,12 @@ export interface JobOptions {
   desc?: unknown;
   title?: unknown;
   finalidade?: unknown;
+  /** Per-stage sizes for `offer run`. */
+  places?: unknown;
+  enrich?: unknown;
+  score?: unknown;
+  withLoad?: boolean;
+  reshortlist?: boolean;
 }
 
 /** Mirrors the CHECK constraint on offers.id in migration 006. */
@@ -72,9 +78,15 @@ function text(v: unknown, max: number): string {
  * argument is generated, so no user-supplied string ever reaches the process.
  *
  * Absent on purpose, not merely hidden in the UI:
- *   load / ibge  — 2GB+ and ~30 minutes, a bad fit for a browser tab
+ *   ibge         — one-time setup, and nothing in the dashboard depends on
+ *                  being able to re-run it
  *   queue        — interactive (readline on stdin); spawned it would hang
  *   --allow-paid — the one flag that can actually spend money
+ *
+ * `load` is reachable only inside `offer-run`, behind an explicit --with-load,
+ * and only for CNAE slices the offer targets and the base lacks. The reason it
+ * was excluded outright is still true — gigabytes and ~30 minutes — so that
+ * became the warning the UI shows rather than a reason to hide the capability.
  */
 const COMMANDS = {
   enrich: {
@@ -118,6 +130,24 @@ const COMMANDS = {
       "--limit", int(o.limit, 1, 50000, 5000),
     ],
   },
+  // The whole campaign as one process. It is one job rather than a chain
+  // because `jobs_one_running_idx` permits exactly one running job — chaining
+  // would need an orchestrator above this table, with idempotent advance and a
+  // race on every poll. Sequential stages in one process get cancellation, log
+  // streaming and crash reconciliation for free.
+  //
+  // Every stage size is clamped here, and --allow-paid is still unreachable.
+  "offer-run": {
+    label: "Rodar pipeline",
+    build: (o: JobOptions) => [
+      "offer", "run", offerId(o.offer),
+      "--places", int(o.places, 0, 200, 0),
+      "--enrich", int(o.enrich, 0, 5000, 500),
+      "--score", int(o.score, 0, 2000, 200),
+      ...(o.withLoad ? ["--with-load"] : []),
+      ...(o.reshortlist === false ? ["--no-reshortlist"] : []),
+    ],
+  },
   places: {
     label: "Buscar no Google",
     build: (o: JobOptions) => [
@@ -148,6 +178,7 @@ export const JOB_LABELS: Record<JobKind, string> = {
   places: COMMANDS.places.label,
   "offer-compile": COMMANDS["offer-compile"].label,
   "offer-shortlist": COMMANDS["offer-shortlist"].label,
+  "offer-run": COMMANDS["offer-run"].label,
   "refresh-rollups": COMMANDS["refresh-rollups"].label,
 };
 
@@ -254,6 +285,15 @@ export async function startJob(kind: JobKind, opts: JobOptions): Promise<StartRe
   if (!job) return { ok: false, reason: "não foi possível criar o job" };
 
   const jobId = job.id;
+
+  // The pipeline records its own progress in `pipeline_runs`, and that row is
+  // only useful to the UI if it can be tied back to this job's log and cancel
+  // button. The id does not exist until the INSERT above, so it is appended
+  // here and written back so `args` still shows exactly what ran.
+  if (kind === "offer-run") {
+    args = [...args, "--job", String(jobId)];
+    await sql(`UPDATE jobs SET args = $2 WHERE id = $1`, [jobId, args]);
+  }
 
   try {
     if (!existsSync(TSX_BIN)) {

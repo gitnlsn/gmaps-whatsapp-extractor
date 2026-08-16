@@ -1,7 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getOffer, getOfferSpec, checkOfferCnaes, getCandidates } from "@/lib/offers";
-import OfferActions from "./OfferActions";
+import {
+  getOffer,
+  getOfferSpec,
+  checkOfferCnaes,
+  getCandidates,
+  getCurrentPipelineRun,
+  readyForReview,
+} from "@/lib/offers";
+import PipelinePanel from "./PipelinePanel";
 
 export const dynamic = "force-dynamic";
 
@@ -43,10 +50,12 @@ export default async function OfferPage({
     notFound();
   }
 
-  const [specRow, cnaes, candidates] = await Promise.all([
+  const [specRow, cnaes, candidates, run, awaitingReview] = await Promise.all([
     getOfferSpec(slug),
     checkOfferCnaes(offer.cnaes),
     getCandidates(slug, page),
+    getCurrentPipelineRun(slug),
+    readyForReview(slug),
   ]);
 
   const spec = (specRow?.spec ?? {}) as Record<string, any>;
@@ -68,11 +77,15 @@ export default async function OfferPage({
         {offer.summary ?? "—"}
       </p>
 
-      <OfferActions
+      <PipelinePanel
         offerId={slug}
         active={offer.active}
         shortlisted={offer.shortlisted}
         enriched={offer.enriched}
+        scored={offer.scored}
+        awaitingReview={awaitingReview}
+        missingCnaes={notLoaded.map((c) => c.prefix)}
+        initialRun={run}
       />
 
       {unknown.length > 0 && (

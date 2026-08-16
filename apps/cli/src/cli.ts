@@ -22,6 +22,7 @@ import {
   promptSha,
   refreshRollups,
   resolveOffer,
+  runOfferPipeline,
   runPlacesEnrichment,
   saveSpec,
   scoreLeads,
@@ -217,7 +218,7 @@ offer
 
       const missing = checks.filter((c) => c.status === "not_loaded").map((c) => c.prefix);
       if (missing.length) {
-        console.log(`\nPara carregar:\n  pnpm load -- --cnae ${missing.join(",")}`);
+        console.log(`\nPara carregar:\n  pnpm load --cnae ${missing.join(",")}`);
       }
       const bogus = checks.filter((c) => c.status === "unknown");
       if (bogus.length) {
@@ -348,7 +349,9 @@ offer
     run(async (d) => {
       const description = String(opts.desc);
       console.log("Compilando descrição em perfil de cliente ideal (2 chamadas)...");
-      const { spec, model, rationale } = await compileOffer(d, description);
+      const { spec, model, rationale } = await compileOffer(d, description, {
+        llmDailyRequests: llmDailyRequests(),
+      });
 
       console.log(`\nEtapa: ${spec.stage}`);
       console.log(`Resumo: ${spec.summary}`);
@@ -402,6 +405,47 @@ offer
           `  pnpm leads offer shortlist ${opts.slug}\n` +
           `  pnpm leads offer top ${opts.slug}`
       );
+    })
+  );
+
+offer
+  .command("run [id]")
+  .description(
+    "Run the whole campaign in order: shortlist -> places -> enrich -> re-rank -> score.\n" +
+      "Stops at the review queue. It never contacts anybody."
+  )
+  .option("-p, --places <n>", "Google Places calls (never past the free tier)", "0")
+  .option("-e, --enrich <n>", "Sites to fetch", "500")
+  .option("-s, --score <n>", "Leads to score", "200")
+  .option("--shortlist <n>", "How many to rank", "5000")
+  .option("--batch <n>", "Leads per LLM request", "10")
+  .option("--with-load", "Also download Receita slices this offer targets but you lack")
+  .option("--no-reshortlist", "Skip the re-rank after enrichment")
+  .option("--job <id>", "Link this run to a dashboard job row")
+  .option("--dry-run", "Print the plan and exit")
+  .action((id: string | undefined, opts: Record<string, string | boolean>) =>
+    run(async (d) => {
+      const result = await runOfferPipeline(d, {
+        offerId: id,
+        places: parseInt(String(opts.places), 10),
+        enrich: parseInt(String(opts.enrich), 10),
+        score: parseInt(String(opts.score), 10),
+        shortlistLimit: parseInt(String(opts.shortlist), 10),
+        scoreBatch: parseInt(String(opts.batch), 10),
+        withLoad: Boolean(opts.withLoad),
+        reshortlist: opts.reshortlist !== false,
+        jobId: opts.job ? parseInt(String(opts.job), 10) : undefined,
+        llmDailyRequests: llmDailyRequests(),
+        psiApiKey: psiApiKey(),
+        dryRun: Boolean(opts.dryRun),
+      });
+
+      for (const s of result.steps) {
+        const mark =
+          s.status === "done" ? "✔" : s.status === "skipped" ? "·" : s.status === "failed" ? "✖" : "…";
+        console.log(`  ${mark} ${s.label}${s.note ? ` — ${s.note}` : ""}`);
+      }
+      if (result.status === "failed") process.exitCode = 1;
     })
   );
 

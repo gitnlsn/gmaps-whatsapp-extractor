@@ -34,7 +34,13 @@ export {
 export { migrateSchema, splitStatements } from "./usecases/migrateSchema";
 export { loadMunicipios } from "./usecases/loadMunicipios";
 export { loadCnaes, loadReceita, latestPeriod, classifyPending, type LoadOptions } from "./usecases/loadReceita";
-export { compileOffer, validateCnaes, type CompileResult, type CnaeCheck } from "./usecases/compileOffer";
+export {
+  compileOffer,
+  validateCnaes,
+  type CompileOptions,
+  type CompileResult,
+  type CnaeCheck,
+} from "./usecases/compileOffer";
 export {
   listOffers, loadOffer, activeOffer, resolveOffer, saveSpec, setActive, seedLegacy,
   type OfferRow, type LoadedOffer, type SaveSpecInput,
@@ -47,5 +53,13 @@ export {
 export { runPlacesEnrichment, type PlacesRunOptions, type PlacesRunResult } from "./usecases/runPlaces";
 export { scoreLeads, type ScoreOptions, type ScoreRunResult } from "./usecases/scoreLeads";
 export { refreshRollups, refreshRollupsQuietly } from "./usecases/refreshRollups";
+export {
+  runOfferPipeline,
+  type RunPipelineOptions,
+  type PipelineResult,
+  type Step,
+  type StepKey,
+  type StepStatus,
+} from "./usecases/runOfferPipeline";
 export { exportLeads, exportDemand, type ExportOptions, type ExportResult } from "./usecases/exportLeads";
 export { draftMessage, templateDraft, waMeLink, type DraftInput, type Sender } from "./usecases/draftMessage";

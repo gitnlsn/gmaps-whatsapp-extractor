@@ -5,6 +5,7 @@ import {
   getOfferSpec,
   checkOfferCnaes,
   getCandidates,
+  getCandidateSegments,
   getCurrentPipelineRun,
   readyForReview,
 } from "@/lib/offers";
@@ -29,6 +30,7 @@ export default async function OfferPage({
   const sp = await searchParams;
   const page = Number(Array.isArray(sp.page) ? sp.page[0] : (sp.page ?? 1)) || 1;
   const awaiting = Boolean(sp.awaiting);
+  const segmento = String(Array.isArray(sp.segmento) ? sp.segmento[0] : (sp.segmento ?? ""));
 
   const offer = await getOffer(slug);
   if (!offer) {
@@ -38,12 +40,13 @@ export default async function OfferPage({
     notFound();
   }
 
-  const [specRow, cnaes, candidates, run, awaitingReview] = await Promise.all([
+  const [specRow, cnaes, candidates, run, awaitingReview, segments] = await Promise.all([
     getOfferSpec(slug),
     checkOfferCnaes(offer.cnaes),
-    getCandidates(slug, page),
+    getCandidates(slug, page, 50, segmento || undefined),
     getCurrentPipelineRun(slug),
     readyForReview(slug),
+    getCandidateSegments(slug),
   ]);
 
   const spec = (specRow?.spec ?? {}) as Record<string, any>;
@@ -182,6 +185,38 @@ export default async function OfferPage({
         <span className="muted" style={{ fontSize: 11.5, flex: 1 }}>
           ordenadas por nota quando pontuadas, senão pelo ranking determinístico
         </span>
+        {/*
+          Segment chips. A compiled offer routinely reaches more segments than
+          you meant — this one ranked ensino fundamental at 40% and cursinhos,
+          the actual target, at 2% — and until you can see the split by segment
+          there is nothing on the page that says so.
+
+          Links rather than a <select>: filters live in the URL everywhere else
+          in this app, so a filtered view stays linkable and the server does the
+          work.
+        */}
+        {segments.length > 1 && (
+          <span style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "baseline" }}>
+            <Link
+              className={segmento ? "chip chip-plain" : "chip chip-ok"}
+              href={`/offers/${slug}`}
+              style={{ textDecoration: "none" }}
+            >
+              todos {fmt(segments.reduce((n, x) => n + x.n, 0))}
+            </Link>
+            {segments.map((sg) => (
+              <Link
+                key={sg.cnae}
+                className={segmento === sg.cnae ? "chip chip-ok" : "chip chip-plain"}
+                href={`/offers/${slug}?segmento=${sg.cnae}`}
+                title={`${sg.cnae} — ${sg.descricao ?? ""}`}
+                style={{ textDecoration: "none" }}
+              >
+                {(sg.descricao ?? sg.cnae).slice(0, 34)} {fmt(sg.n)}
+              </Link>
+            ))}
+          </span>
+        )}
         {candidates.total > 0 && (
           <a className="btn" href={`/offers/${slug}/export`} download>
             ↓ baixar CSV
@@ -260,7 +295,7 @@ export default async function OfferPage({
       {totalPages > 1 && (
         <div style={{ display: "flex", gap: 10, marginTop: 10, fontSize: 12 }}>
           {page > 1 && (
-            <Link className="link" href={`/offers/${slug}?page=${page - 1}`}>
+            <Link className="link" href={`/offers/${slug}?page=${page - 1}${segmento ? `&segmento=${segmento}` : ""}`}>
               ← anterior
             </Link>
           )}
@@ -268,7 +303,7 @@ export default async function OfferPage({
             página {page} de {totalPages}
           </span>
           {page < totalPages && (
-            <Link className="link" href={`/offers/${slug}?page=${page + 1}`}>
+            <Link className="link" href={`/offers/${slug}?page=${page + 1}${segmento ? `&segmento=${segmento}` : ""}`}>
               próxima →
             </Link>
           )}

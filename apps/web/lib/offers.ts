@@ -190,13 +190,49 @@ export interface CandidateRow {
   status: string;
 }
 
+/**
+ * The segments actually present in a shortlist, with counts.
+ *
+ * Worth surfacing because a compiled offer routinely targets more segments than
+ * you meant: this one was ranking ensino fundamental at 40% and cursinhos — the
+ * real target — at 2%, and nothing on the page said so.
+ */
+export interface SegmentCount {
+  cnae: string;
+  descricao: string | null;
+  n: number;
+}
+
+export async function getCandidateSegments(offerId: string): Promise<SegmentCount[]> {
+  const rows = await sql<{ cnae: string; descricao: string | null; n: string }>(
+    `SELECT l.cnae_principal AS cnae, cn.descricao, count(*)::text AS n
+       FROM offer_candidates oc
+       JOIN leads l ON l.cnpj = oc.cnpj
+       LEFT JOIN cnaes cn ON cn.codigo = l.cnae_principal
+      WHERE oc.offer_id = $1
+      GROUP BY 1, 2
+      ORDER BY count(*) DESC`,
+    [offerId]
+  );
+  return rows.map((r) => ({ cnae: r.cnae, descricao: r.descricao, n: Number(r.n) }));
+}
+
 /** The ranked list. Free — this is Stage 1 output, not LLM output. */
 export async function getCandidates(
   offerId: string,
   page = 1,
-  perPage = 50
+  perPage = 50,
+  /** CNAE to restrict to. Validated as digits before it reaches SQL. */
+  segment?: string
 ): Promise<{ rows: CandidateRow[]; total: number }> {
   const offset = (Math.max(page, 1) - 1) * perPage;
+  // Parameterised, and additionally constrained to digits: a CNAE is digits, so
+  // anything else is not a segment that exists. A malformed value is dropped and
+  // the unfiltered list is returned — the same thing a nonsense filter does
+  // everywhere else in this app, and safe because the value never reaches SQL.
+  const cnae = segment && /^\d{1,7}$/.test(segment) ? segment : undefined;
+  const filter = cnae ? "AND l.cnae_principal = $4" : "";
+
   const rows = await sql<CandidateRow>(
     `SELECT oc.cnpj, l.nome_fantasia AS nome, l.municipio_nome AS municipio, l.uf,
             l.cnae_principal AS cnae, cn.descricao AS cnae_desc, l.is_mobile,
@@ -211,17 +247,21 @@ export async function getCandidates(
        LEFT JOIN scores s ON s.cnpj = oc.cnpj AND s.offer_id = oc.offer_id
        LEFT JOIN outreach o ON o.cnpj = oc.cnpj
       WHERE oc.offer_id = $1
+        ${filter}
       ORDER BY s.best_fit DESC NULLS LAST,
                oc.rank_score DESC,
                COALESCE(l.capital_social, 0) DESC,
                oc.cnpj
       LIMIT $2 OFFSET $3`,
-    [offerId, perPage, offset]
+    cnae ? [offerId, perPage, offset, cnae] : [offerId, perPage, offset]
   );
 
   const count = await sqlOne<{ n: string }>(
-    `SELECT count(*)::text AS n FROM offer_candidates WHERE offer_id = $1`,
-    [offerId]
+    `SELECT count(*)::text AS n
+       FROM offer_candidates oc
+       JOIN leads l ON l.cnpj = oc.cnpj
+      WHERE oc.offer_id = $1 ${cnae ? "AND l.cnae_principal = $2" : ""}`,
+    cnae ? [offerId, cnae] : [offerId]
   );
   return { rows, total: Number(count?.n ?? 0) };
 }
